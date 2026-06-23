@@ -63,8 +63,16 @@ async function inferenceHeaders({ apiKey, orgId, extraHeaders, }) {
         ...(await resolveExtraHeaders(extraHeaders)),
         authorization: `Bearer ${apiKey}`,
         "x-org-id": orgId,
+        "x-impel-org-id": orgId,
         "content-type": "application/json",
     };
+}
+function parseStreamTailIndex(response) {
+    const value = response.headers.get("x-workflow-stream-tail-index");
+    if (value == null || value.trim() === "")
+        return undefined;
+    const n = Number.parseInt(value, 10);
+    return Number.isInteger(n) && n >= 0 ? n : undefined;
 }
 async function inferenceResponseError(response) {
     const body = await response.text().catch(() => "");
@@ -90,15 +98,17 @@ async function openInferenceStream({ url, headers, body, method = "GET", }) {
     if (!response.body) {
         throw new Error("impel-inference response had no stream body");
     }
+    const tailIndex = parseStreamTailIndex(response);
     return {
         stream: parseJsonEventStream({
             stream: response.body,
             schema: streamPartSchema,
         }),
         runId: response.headers.get("x-workflow-run-id") ?? undefined,
+        nextStartIndex: tailIndex == null ? undefined : tailIndex + 1,
     };
 }
-async function startInferenceStream({ baseUrl, headers, body, }) {
+async function startInferenceStream({ baseUrl, headers, body, orgId, }) {
     const response = await fetch(`${baseUrl}/v1/infer/start`, {
         method: "POST",
         headers,
@@ -122,8 +132,15 @@ async function startInferenceStream({ baseUrl, headers, body, }) {
     if (!streamUrl.searchParams.has("startIndex")) {
         streamUrl.searchParams.set("startIndex", "0");
     }
+    if (!streamUrl.searchParams.has("orgId")) {
+        streamUrl.searchParams.set("orgId", orgId);
+    }
     const stream = await openInferenceStream({ url: streamUrl.toString(), headers });
-    return { stream: stream.stream, runId: stream.runId ?? runId };
+    return {
+        stream: stream.stream,
+        runId: stream.runId ?? runId,
+        nextStartIndex: stream.nextStartIndex,
+    };
 }
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -393,7 +410,7 @@ export function impelInference(modelId, opts) {
         });
         async function createInferenceRun() {
             try {
-                return await startInferenceStream({ baseUrl, headers, body });
+                return await startInferenceStream({ baseUrl, headers, body, orgId });
             }
             catch (error) {
                 if (!(error instanceof StartEndpointUnavailableError))
@@ -426,6 +443,7 @@ export function impelInference(modelId, opts) {
                 sawStreamStart = true;
                 void (async () => {
                     let current = initial;
+                    let resumeStartIndex = initial.nextStartIndex ?? 0;
                     let skipAlreadySeen = 0;
                     let resumeAttempts = 0;
                     let transientAttempts = 0;
@@ -587,13 +605,16 @@ export function impelInference(modelId, opts) {
                                 !pendingFinish) {
                                 resumeAttempts += 1;
                                 await sleep(resumeDelayMs);
-                                skipAlreadySeen = upstreamPartCount;
+                                const startIndex = resumeStartIndex;
+                                skipAlreadySeen = startIndex === 0 ? upstreamPartCount : 0;
                                 const resumed = await openInferenceStream({
                                     url: `${baseUrl}/v1/infer/runs/` +
-                                        `${encodeURIComponent(inferenceRunId)}/stream?startIndex=0`,
+                                        `${encodeURIComponent(inferenceRunId)}/stream?startIndex=${startIndex}` +
+                                        `&orgId=${encodeURIComponent(orgId)}`,
                                     headers,
                                 });
                                 inferenceRunId = resumed.runId ?? inferenceRunId;
+                                resumeStartIndex = resumed.nextStartIndex ?? startIndex;
                                 current = resumed;
                                 continue;
                             }

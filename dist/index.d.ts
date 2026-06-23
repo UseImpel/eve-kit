@@ -22,8 +22,8 @@ export interface ImpelInferenceOptions {
     providerOptions?: Record<string, unknown>;
     /**
      * Additional request headers, evaluated per model call. Useful for W3C trace
-     * headers. authorization, content-type, and x-org-id are always controlled by
-     * this package and cannot be overridden here.
+     * headers. authorization, content-type, x-org-id, and x-impel-org-id are
+     * always controlled by this package and cannot be overridden here.
      */
     headers?: ImpelInferenceHeaders;
     /**

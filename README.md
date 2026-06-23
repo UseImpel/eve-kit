@@ -10,7 +10,7 @@ the normal Eve filesystem layout: `agent.ts`, `channels/`, `sandbox/`,
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.8.tar.gz
+npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.9.tar.gz
 ```
 
 ## Eve Usage
@@ -134,6 +134,9 @@ This package does not contain credentials and does not grant access to
 or `IMPEL_INFERENCE_API_KEY`; calls fail locally before `fetch` when the key is
 missing. The service also enforces the bearer token on `/v1/infer`,
 `/v1/infer/start`, and `/v1/infer/runs/:runId/stream`.
+Stream resumes include the resolved `orgId` as both `x-impel-org-id` and an
+`orgId` query parameter so the service can verify the run belongs to that org
+before tailing it.
 
 The default Eve HTTP channel enables `localDev()`, `vercelOidc()`, and Basic
 auth from `EVE_APP_BASIC_USER`/`EVE_APP_BASIC_PASSWORD` or
@@ -171,5 +174,6 @@ impelInference("claude-opus-4-8", {
 });
 ```
 
-The provider preserves its own `authorization`, `content-type`, and `x-org-id`
-headers so custom headers cannot override authentication.
+The provider preserves its own `authorization`, `content-type`, `x-org-id`, and
+`x-impel-org-id` headers so custom headers cannot override authentication or org
+binding.

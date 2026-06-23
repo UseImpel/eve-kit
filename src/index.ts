@@ -43,8 +43,8 @@ export interface ImpelInferenceOptions {
   providerOptions?: Record<string, unknown>;
   /**
    * Additional request headers, evaluated per model call. Useful for W3C trace
-   * headers. authorization, content-type, and x-org-id are always controlled by
-   * this package and cannot be overridden here.
+   * headers. authorization, content-type, x-org-id, and x-impel-org-id are
+   * always controlled by this package and cannot be overridden here.
    */
   headers?: ImpelInferenceHeaders;
   /**
@@ -73,6 +73,7 @@ type ParsedStreamPart = z.infer<typeof streamPartSchema>;
 interface InferenceStream {
   stream: ReadableStream<ParseResult<ParsedStreamPart>>;
   runId?: string;
+  nextStartIndex?: number;
 }
 
 class StartEndpointUnavailableError extends Error {}
@@ -165,8 +166,16 @@ async function inferenceHeaders({
     ...(await resolveExtraHeaders(extraHeaders)),
     authorization: `Bearer ${apiKey}`,
     "x-org-id": orgId,
+    "x-impel-org-id": orgId,
     "content-type": "application/json",
   };
+}
+
+function parseStreamTailIndex(response: Response): number | undefined {
+  const value = response.headers.get("x-workflow-stream-tail-index");
+  if (value == null || value.trim() === "") return undefined;
+  const n = Number.parseInt(value, 10);
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
 }
 
 async function inferenceResponseError(response: Response): Promise<Error> {
@@ -205,12 +214,14 @@ async function openInferenceStream({
     throw new Error("impel-inference response had no stream body");
   }
 
+  const tailIndex = parseStreamTailIndex(response);
   return {
     stream: parseJsonEventStream({
       stream: response.body,
       schema: streamPartSchema,
     }),
     runId: response.headers.get("x-workflow-run-id") ?? undefined,
+    nextStartIndex: tailIndex == null ? undefined : tailIndex + 1,
   };
 }
 
@@ -218,10 +229,12 @@ async function startInferenceStream({
   baseUrl,
   headers,
   body,
+  orgId,
 }: {
   baseUrl: string;
   headers: Record<string, string>;
   body: unknown;
+  orgId: string;
 }): Promise<InferenceStream> {
   const response = await fetch(`${baseUrl}/v1/infer/start`, {
     method: "POST",
@@ -256,8 +269,15 @@ async function startInferenceStream({
   if (!streamUrl.searchParams.has("startIndex")) {
     streamUrl.searchParams.set("startIndex", "0");
   }
+  if (!streamUrl.searchParams.has("orgId")) {
+    streamUrl.searchParams.set("orgId", orgId);
+  }
   const stream = await openInferenceStream({ url: streamUrl.toString(), headers });
-  return { stream: stream.stream, runId: stream.runId ?? runId };
+  return {
+    stream: stream.stream,
+    runId: stream.runId ?? runId,
+    nextStartIndex: stream.nextStartIndex,
+  };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -620,7 +640,7 @@ export function impelInference(
 
     async function createInferenceRun(): Promise<InferenceStream> {
       try {
-        return await startInferenceStream({ baseUrl, headers, body });
+        return await startInferenceStream({ baseUrl, headers, body, orgId });
       } catch (error) {
         if (!(error instanceof StartEndpointUnavailableError)) throw error;
         return await openInferenceStream({
@@ -667,6 +687,7 @@ export function impelInference(
 
         void (async () => {
           let current = initial;
+          let resumeStartIndex = initial.nextStartIndex ?? 0;
           let skipAlreadySeen = 0;
           let resumeAttempts = 0;
           let transientAttempts = 0;
@@ -843,14 +864,17 @@ export function impelInference(
               ) {
                 resumeAttempts += 1;
                 await sleep(resumeDelayMs);
-                skipAlreadySeen = upstreamPartCount;
+                const startIndex = resumeStartIndex;
+                skipAlreadySeen = startIndex === 0 ? upstreamPartCount : 0;
                 const resumed = await openInferenceStream({
                   url:
                     `${baseUrl}/v1/infer/runs/` +
-                    `${encodeURIComponent(inferenceRunId)}/stream?startIndex=0`,
+                    `${encodeURIComponent(inferenceRunId)}/stream?startIndex=${startIndex}` +
+                    `&orgId=${encodeURIComponent(orgId)}`,
                   headers,
                 });
                 inferenceRunId = resumed.runId ?? inferenceRunId;
+                resumeStartIndex = resumed.nextStartIndex ?? startIndex;
                 current = resumed;
                 continue;
               }
