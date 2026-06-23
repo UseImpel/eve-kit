@@ -13,6 +13,8 @@ import {
 
 export const IMPEL_CLAUDE_CONTEXT_WINDOW_TOKENS = 200000;
 export const IMPEL_DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";
+export const IMPEL_CODEX_CONTEXT_WINDOW_TOKENS = 200000;
+export const IMPEL_DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
 
 export interface ImpelClaudeProviderOptionsInput {
   providerOptions?: ClaudeCodeSettings;
@@ -30,6 +32,23 @@ export interface ImpelClaudeModelOptions
   defaultModelId?: string;
   localModel?: ClaudeCodeModelId;
   defaultLocalModel?: ClaudeCodeModelId;
+  headers?: ImpelInferenceHeaders;
+  runContext?: ImpelInferenceRunContextProvider;
+}
+
+export interface ImpelCodexProviderOptionsInput {
+  providerOptions?: Record<string, unknown>;
+  approvalMode?: string;
+  sandboxMode?: string;
+  skipGitRepoCheck?: boolean;
+  effort?: string;
+}
+
+export interface ImpelCodexModelOptions
+  extends Omit<ImpelInferenceOptions, "providerOptions" | "provider">,
+    ImpelCodexProviderOptionsInput {
+  modelId?: string;
+  defaultModelId?: string;
   headers?: ImpelInferenceHeaders;
   runContext?: ImpelInferenceRunContextProvider;
 }
@@ -58,6 +77,32 @@ export function resolveImpelClaudeModelId({
   defaultModelId?: string;
 } = {}): string {
   return modelId ?? process.env.IMPEL_MODEL_ID ?? defaultModelId;
+}
+
+export function createImpelCodexProviderOptions({
+  providerOptions,
+  approvalMode = "never",
+  sandboxMode = "workspace-write",
+  skipGitRepoCheck = true,
+  effort,
+}: ImpelCodexProviderOptionsInput = {}): Record<string, unknown> {
+  return {
+    approvalMode,
+    sandboxMode,
+    skipGitRepoCheck,
+    ...(effort ? { effort } : {}),
+    ...(providerOptions ?? {}),
+  };
+}
+
+export function resolveImpelCodexModelId({
+  modelId,
+  defaultModelId = IMPEL_DEFAULT_CODEX_MODEL_ID,
+}: {
+  modelId?: string;
+  defaultModelId?: string;
+} = {}): string {
+  return modelId ?? process.env.IMPEL_CODEX_MODEL_ID ?? defaultModelId;
 }
 
 export function inferClaudeCodeLocalModel(
@@ -113,4 +158,35 @@ export function createImpelClaudeModel(
     localModel ?? inferClaudeCodeLocalModel(modelId, defaultLocalModel),
     { ...resolvedProviderOptions, ...(localProviderOptions ?? {}) },
   );
+}
+
+export function createImpelCodexModel(
+  options: ImpelCodexModelOptions = {},
+): LanguageModelV3 {
+  const {
+    modelId: explicitModelId,
+    defaultModelId,
+    providerOptions,
+    approvalMode,
+    sandboxMode,
+    skipGitRepoCheck,
+    effort,
+    ...inferenceOptions
+  } = options;
+  const modelId = resolveImpelCodexModelId({
+    modelId: explicitModelId,
+    defaultModelId,
+  });
+
+  return impelInference(modelId, {
+    ...inferenceOptions,
+    provider: "codex-cli",
+    providerOptions: createImpelCodexProviderOptions({
+      providerOptions,
+      approvalMode,
+      sandboxMode,
+      skipGitRepoCheck,
+      effort,
+    }),
+  });
 }

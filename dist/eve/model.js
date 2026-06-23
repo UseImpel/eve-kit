@@ -2,6 +2,8 @@ import { claudeCode, } from "ai-sdk-provider-claude-code";
 import { impelInference, } from "../index.js";
 export const IMPEL_CLAUDE_CONTEXT_WINDOW_TOKENS = 200000;
 export const IMPEL_DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";
+export const IMPEL_CODEX_CONTEXT_WINDOW_TOKENS = 200000;
+export const IMPEL_DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
 export function createImpelClaudeProviderOptions({ providerOptions, permissionMode = "bypassPermissions", allowDangerouslySkipPermissions = true, effort, cwd, } = {}) {
     return {
         permissionMode,
@@ -13,6 +15,18 @@ export function createImpelClaudeProviderOptions({ providerOptions, permissionMo
 }
 export function resolveImpelClaudeModelId({ modelId, defaultModelId = IMPEL_DEFAULT_CLAUDE_MODEL_ID, } = {}) {
     return modelId ?? process.env.IMPEL_MODEL_ID ?? defaultModelId;
+}
+export function createImpelCodexProviderOptions({ providerOptions, approvalMode = "never", sandboxMode = "workspace-write", skipGitRepoCheck = true, effort, } = {}) {
+    return {
+        approvalMode,
+        sandboxMode,
+        skipGitRepoCheck,
+        ...(effort ? { effort } : {}),
+        ...(providerOptions ?? {}),
+    };
+}
+export function resolveImpelCodexModelId({ modelId, defaultModelId = IMPEL_DEFAULT_CODEX_MODEL_ID, } = {}) {
+    return modelId ?? process.env.IMPEL_CODEX_MODEL_ID ?? defaultModelId;
 }
 export function inferClaudeCodeLocalModel(modelId, fallback = "opus") {
     if (/sonnet/i.test(modelId))
@@ -42,5 +56,23 @@ export function createImpelClaudeModel(options = {}) {
         });
     }
     return claudeCode(localModel ?? inferClaudeCodeLocalModel(modelId, defaultLocalModel), { ...resolvedProviderOptions, ...(localProviderOptions ?? {}) });
+}
+export function createImpelCodexModel(options = {}) {
+    const { modelId: explicitModelId, defaultModelId, providerOptions, approvalMode, sandboxMode, skipGitRepoCheck, effort, ...inferenceOptions } = options;
+    const modelId = resolveImpelCodexModelId({
+        modelId: explicitModelId,
+        defaultModelId,
+    });
+    return impelInference(modelId, {
+        ...inferenceOptions,
+        provider: "codex-cli",
+        providerOptions: createImpelCodexProviderOptions({
+            providerOptions,
+            approvalMode,
+            sandboxMode,
+            skipGitRepoCheck,
+            effort,
+        }),
+    });
 }
 //# sourceMappingURL=model.js.map
