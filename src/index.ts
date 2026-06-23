@@ -334,6 +334,51 @@ function rejectedFinishMessage({
   return undefined;
 }
 
+function transientErrorTextState(text: string): "match" | "possible" | "no" {
+  const normalized = text.trimStart().toLowerCase();
+  if (normalized === "") return "possible";
+  const prefix = "api error:";
+  if (prefix.startsWith(normalized)) return "possible";
+  if (normalized.startsWith(prefix)) return "match";
+  return "no";
+}
+
+function stringifyErrorLike(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function isTransientProviderError({
+  error,
+  heldText,
+}: {
+  error: unknown;
+  heldText?: string;
+}): boolean {
+  const text = `${heldText ?? ""}\n${stringifyErrorLike(error)}`;
+  return (
+    /\b529\b/.test(text) ||
+    /overloaded/i.test(text) ||
+    /temporar(?:y|ily) unavailable/i.test(text) ||
+    /rate.?limit/i.test(text) ||
+    /\b(?:econnreset|etimedout|timeout)\b/i.test(text)
+  );
+}
+
+function isUserVisibleStreamPart(part: LanguageModelV3StreamPart): boolean {
+  return ![
+    "stream-start",
+    "response-metadata",
+    "finish",
+    "error",
+  ].includes(part.type);
+}
+
 function errorPart(message: string): LanguageModelV3StreamPart {
   return { type: "error", error: new Error(redactString(message)) };
 }
@@ -572,22 +617,27 @@ export function impelInference(
       orgId,
       extraHeaders: opts?.headers,
     });
-    let initial: InferenceStream;
-    try {
-      initial = await startInferenceStream({ baseUrl, headers, body });
-    } catch (error) {
-      if (!(error instanceof StartEndpointUnavailableError)) throw error;
-      initial = await openInferenceStream({
-        url: `${baseUrl}/v1/infer`,
-        headers,
-        body,
-        method: "POST",
-      });
+
+    async function createInferenceRun(): Promise<InferenceStream> {
+      try {
+        return await startInferenceStream({ baseUrl, headers, body });
+      } catch (error) {
+        if (!(error instanceof StartEndpointUnavailableError)) throw error;
+        return await openInferenceStream({
+          url: `${baseUrl}/v1/infer`,
+          headers,
+          body,
+          method: "POST",
+        });
+      }
     }
+
+    const initial = await createInferenceRun();
 
     let sawStreamStart = false;
     let sawUpstreamPart = false;
     let sawOutputPart = false;
+    let sawUserVisibleOutput = false;
     let sawProviderError = false;
     let pendingFinish: LanguageModelV3StreamPart | undefined;
     let upstreamPartCount = 0;
@@ -597,6 +647,14 @@ export function impelInference(
       20,
     );
     const resumeDelayMs = envNumber("IMPEL_INFERENCE_RESUME_DELAY_MS", 1000);
+    const maxTransientAttempts = envNumber(
+      "IMPEL_INFERENCE_TRANSIENT_MAX_ATTEMPTS",
+      2,
+    );
+    const transientDelayMs = envNumber(
+      "IMPEL_INFERENCE_TRANSIENT_RETRY_DELAY_MS",
+      1500,
+    );
 
     let upstreamReader:
       | ReadableStreamDefaultReader<ParseResult<ParsedStreamPart>>
@@ -611,12 +669,36 @@ export function impelInference(
           let current = initial;
           let skipAlreadySeen = 0;
           let resumeAttempts = 0;
+          let transientAttempts = 0;
+          let heldTextParts: LanguageModelV3StreamPart[] = [];
+          let heldText = "";
+          let holdingApiErrorText = false;
+
+          function enqueuePart(part: LanguageModelV3StreamPart) {
+            sawOutputPart = true;
+            if (isUserVisibleStreamPart(part)) sawUserVisibleOutput = true;
+            controller.enqueue(part);
+          }
+
+          function flushHeldTextParts() {
+            for (const heldPart of heldTextParts) enqueuePart(heldPart);
+            heldTextParts = [];
+            heldText = "";
+            holdingApiErrorText = false;
+          }
+
+          function clearHeldTextParts() {
+            heldTextParts = [];
+            heldText = "";
+            holdingApiErrorText = false;
+          }
 
           try {
             for (;;) {
               upstreamReader = current.stream.getReader();
               let streamClosed = false;
               let partsSeenThisConnection = 0;
+              let retryTransient = false;
 
               try {
                 for (;;) {
@@ -630,9 +712,21 @@ export function impelInference(
                   upstreamPartCount += 1;
 
                   if (!chunk.success) {
-                    sawOutputPart = true;
+                    const transient = isTransientProviderError({
+                      error: chunk.error,
+                      heldText,
+                    });
+                    if (
+                      transient &&
+                      (!sawUserVisibleOutput || holdingApiErrorText) &&
+                      transientAttempts < maxTransientAttempts
+                    ) {
+                      retryTransient = true;
+                      break;
+                    }
+                    flushHeldTextParts();
                     sawProviderError = true;
-                    controller.enqueue({
+                    enqueuePart({
                       type: "error",
                       error: redactedError(chunk.error),
                     });
@@ -651,26 +745,85 @@ export function impelInference(
                       label,
                     });
                     if (rejection) {
-                      sawOutputPart = true;
+                      flushHeldTextParts();
                       sawProviderError = true;
-                      controller.enqueue(errorPart(rejection));
+                      enqueuePart(errorPart(rejection));
                       controller.close();
                       return;
                     }
                     pendingFinish = part;
                     continue;
-                  } else {
-                    sawOutputPart = true;
-                    if (part.type === "error") sawProviderError = true;
                   }
-                  controller.enqueue(part);
+
+                  if (part.type === "text-start" && !sawUserVisibleOutput) {
+                    heldTextParts.push(part);
+                    continue;
+                  }
+
+                  if (heldTextParts.length > 0 && part.type === "text-delta") {
+                    heldTextParts.push(part);
+                    heldText += part.delta;
+                    const state = transientErrorTextState(heldText);
+                    if (state === "match") {
+                      holdingApiErrorText = true;
+                      continue;
+                    }
+                    if (state === "possible") continue;
+                    flushHeldTextParts();
+                    continue;
+                  }
+
+                  if (heldTextParts.length > 0 && part.type === "text-end") {
+                    heldTextParts.push(part);
+                    if (holdingApiErrorText) continue;
+                    flushHeldTextParts();
+                    continue;
+                  }
+
+                  if (part.type === "error") {
+                    const transient = isTransientProviderError({
+                      error: part.error,
+                      heldText,
+                    });
+                    if (
+                      transient &&
+                      (!sawUserVisibleOutput || holdingApiErrorText) &&
+                      transientAttempts < maxTransientAttempts
+                    ) {
+                      retryTransient = true;
+                      break;
+                    }
+                    flushHeldTextParts();
+                    sawProviderError = true;
+                    enqueuePart(part);
+                    continue;
+                  }
+
+                  flushHeldTextParts();
+                  enqueuePart(part);
                 }
               } finally {
                 upstreamReader.releaseLock();
                 upstreamReader = undefined;
               }
 
+              if (retryTransient) {
+                transientAttempts += 1;
+                clearHeldTextParts();
+                pendingFinish = undefined;
+                sawProviderError = false;
+                upstreamPartCount = 0;
+                skipAlreadySeen = 0;
+                resumeAttempts = 0;
+                await sleep(transientDelayMs * transientAttempts);
+                const restarted = await createInferenceRun();
+                inferenceRunId = restarted.runId;
+                current = restarted;
+                continue;
+              }
+
               if (pendingFinish) {
+                flushHeldTextParts();
                 controller.enqueue(pendingFinish);
                 controller.close();
                 return;
