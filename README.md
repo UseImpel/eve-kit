@@ -1,38 +1,82 @@
-# @useimpel/ai-sdk-provider-impel-inference
+# @useimpel/eve-kit
 
-AI SDK provider for Impel's durable inference service.
+Eve helpers and AI SDK provider for Impel's durable inference service.
 
-This package implements the AI SDK `LanguageModelV3` interface used by Eve. It
-forwards provider-level prompts to `impel-inference`, reads the durable SSE
-stream, reconnects by run id when needed, and passes provider stream parts back
-to Eve without reshaping them.
+The root package exports `impelInference`, an AI SDK `LanguageModelV3`
+provider. Eve-specific glue lives under `/eve` subpaths so each agent can keep
+the normal Eve filesystem layout: `agent.ts`, `channels/`, `sandbox/`,
+`tools/`, `evals/`, and `subagents/`.
 
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/ai-sdk-provider-impel-inference/archive/refs/tags/v0.1.3.tar.gz
+npm install https://github.com/UseImpel/ai-sdk-provider-impel-inference/archive/refs/tags/v0.2.0.tar.gz
 ```
 
-## Usage
+## Eve Usage
 
 ```ts
+// agent/agent.ts
 import { defineAgent } from "eve";
-import { claudeCode } from "ai-sdk-provider-claude-code";
-import { impelInference } from "@useimpel/ai-sdk-provider-impel-inference";
+import {
+  createImpelClaudeModel,
+  IMPEL_CLAUDE_CONTEXT_WINDOW_TOKENS,
+} from "@useimpel/eve-kit/eve";
 
-const providerOptions = {
-  permissionMode: "bypassPermissions",
-  allowDangerouslySkipPermissions: true,
-  effort: "xhigh",
-};
+export default defineAgent({
+  model: createImpelClaudeModel({
+    defaultModelId: "claude-opus-4-8",
+    effort: "xhigh",
+    label: "system-agent",
+  }),
+  modelContextWindowTokens: IMPEL_CLAUDE_CONTEXT_WINDOW_TOKENS,
+});
+```
 
-const model = process.env.IMPEL_INFERENCE_URL
-  ? impelInference(process.env.IMPEL_MODEL_ID ?? "claude-opus-4-8", {
-      providerOptions,
-    })
-  : claudeCode("opus", providerOptions);
+```ts
+// agent/channels/eve.ts
+import { defaultImpelEveChannel } from "@useimpel/eve-kit/eve/channel";
 
-export default defineAgent({ model, modelContextWindowTokens: 200000 });
+export default defaultImpelEveChannel();
+```
+
+```ts
+// agent/sandbox/sandbox.ts
+import { impelJustBashSandbox } from "@useimpel/eve-kit/eve/sandbox";
+
+export default impelJustBashSandbox();
+```
+
+```ts
+// agent/tools/render_ui.ts
+export { renderUiTool as default } from "@useimpel/eve-kit/eve/render-ui";
+```
+
+```ts
+// evals/evals.config.ts
+import { createImpelBraintrustEvalConfig } from "@useimpel/eve-kit/eve/evals";
+
+export default createImpelBraintrustEvalConfig({
+  defaultAgentId: "agent-creator",
+});
+```
+
+The helper selects `impel-inference` when `IMPEL_INFERENCE_URL` or `baseUrl` is
+configured. Otherwise it falls back to local `claudeCode(...)`, which keeps
+local Eve development usable.
+
+## Root Provider
+
+```ts
+import { impelInference } from "@useimpel/eve-kit";
+
+const model = impelInference("claude-opus-4-8", {
+  providerOptions: {
+    permissionMode: "bypassPermissions",
+    allowDangerouslySkipPermissions: true,
+    effort: "xhigh",
+  },
+});
 ```
 
 The provider reads these environment variables by default:
@@ -53,8 +97,8 @@ You can override `baseUrl`, `apiKey`, `orgId`, request `headers`, and
 ## Auth
 
 This package does not contain credentials and does not grant access to
-`impel-inference`. Every request requires a bearer token via `apiKey` or
-`IMPEL_INFERENCE_API_KEY`; calls fail locally before `fetch` when the key is
+`impel-inference`. Every inference request requires a bearer token via `apiKey`
+or `IMPEL_INFERENCE_API_KEY`; calls fail locally before `fetch` when the key is
 missing. The service also enforces the bearer token on `/v1/infer`,
 `/v1/infer/start`, and `/v1/infer/runs/:runId/stream`.
 
@@ -77,6 +121,7 @@ Callers that need trace propagation can supply per-request headers:
 
 ```ts
 import { context, propagation } from "@opentelemetry/api";
+import { impelInference } from "@useimpel/eve-kit";
 
 impelInference("claude-opus-4-8", {
   headers: () => {
