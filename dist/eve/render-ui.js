@@ -15,26 +15,33 @@ export const RENDER_UI_COMPONENT_TYPES = [
     "Chart",
 ];
 export const renderUiElementSchema = z.object({
-    id: z.string().min(1),
     type: z.enum(RENDER_UI_COMPONENT_TYPES),
-    props: z.record(z.string(), z.unknown()).default({}),
-    children: z.array(z.string().min(1)).optional(),
+    props: z.record(z.string(), z.unknown()).optional(),
+    children: z.array(z.string()).optional(),
 });
 export const renderUiTreeSchema = z.object({
-    rootId: z.string().min(1),
-    elements: z.array(renderUiElementSchema).min(1),
+    root: z.string().min(1),
+    elements: z.record(z.string(), renderUiElementSchema),
+});
+export const renderUiInputSchema = z.object({
+    tree: renderUiTreeSchema,
+    title: z.string().optional(),
 });
 export const RENDER_UI_TOOL_DESCRIPTION = "Render structured UI for the user. Use this for plans, status, findings, " +
     "tables, metrics, citations, code references, or final summaries that benefit " +
     "from cards, callouts, lists, stats, links, or simple charts.";
 export const RENDER_UI_PROMPT = "When a response benefits from structure, call render_ui with a tree of " +
     "Section, Callout, ActionList, ActionItem, Stat, StatGroup, Badge, KeyValue, " +
-    "CodeRef, SourceLink, Text, and Chart nodes.";
+    "CodeRef, SourceLink, Text, and Chart nodes. The input shape is " +
+    "{ tree: { root, elements }, title? }, where elements is a record keyed by id.";
 export const renderUiTool = defineTool({
     description: RENDER_UI_TOOL_DESCRIPTION,
-    inputSchema: renderUiTreeSchema,
-    execute(input) {
-        return input;
+    inputSchema: renderUiInputSchema,
+    execute({ tree, title }) {
+        const count = Object.keys(tree.elements).length;
+        return title
+            ? `Rendered UI "${title}" (${count} element${count === 1 ? "" : "s"}).`
+            : `Rendered UI (${count} element${count === 1 ? "" : "s"}).`;
     },
     toModelOutput() {
         return {

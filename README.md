@@ -10,7 +10,7 @@ the normal Eve filesystem layout: `agent.ts`, `channels/`, `sandbox/`,
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/ai-sdk-provider-impel-inference/archive/refs/tags/v0.2.0.tar.gz
+npm install https://github.com/UseImpel/ai-sdk-provider-impel-inference/archive/refs/tags/v0.2.1.tar.gz
 ```
 
 ## Eve Usage
