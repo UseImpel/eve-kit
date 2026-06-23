@@ -22,7 +22,7 @@ export function inferClaudeCodeLocalModel(modelId, fallback = "opus") {
     return fallback;
 }
 export function createImpelClaudeModel(options = {}) {
-    const { modelId: explicitModelId, defaultModelId, localModel, defaultLocalModel = "opus", providerOptions, permissionMode, allowDangerouslySkipPermissions, effort, cwd, provider = "claude-code", ...inferenceOptions } = options;
+    const { modelId: explicitModelId, defaultModelId, localModel, defaultLocalModel = "opus", providerOptions, localProviderOptions, permissionMode, allowDangerouslySkipPermissions, effort, cwd, provider = "claude-code", ...inferenceOptions } = options;
     const modelId = resolveImpelClaudeModelId({
         modelId: explicitModelId,
         defaultModelId,
@@ -41,6 +41,6 @@ export function createImpelClaudeModel(options = {}) {
             providerOptions: resolvedProviderOptions,
         });
     }
-    return claudeCode(localModel ?? inferClaudeCodeLocalModel(modelId, defaultLocalModel), resolvedProviderOptions);
+    return claudeCode(localModel ?? inferClaudeCodeLocalModel(modelId, defaultLocalModel), { ...resolvedProviderOptions, ...(localProviderOptions ?? {}) });
 }
 //# sourceMappingURL=model.js.map

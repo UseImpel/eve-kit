@@ -16,6 +16,7 @@ export const IMPEL_DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";
 
 export interface ImpelClaudeProviderOptionsInput {
   providerOptions?: ClaudeCodeSettings;
+  localProviderOptions?: ClaudeCodeSettings;
   permissionMode?: ClaudeCodeSettings["permissionMode"];
   allowDangerouslySkipPermissions?: boolean;
   effort?: ClaudeCodeSettings["effort"];
@@ -77,6 +78,7 @@ export function createImpelClaudeModel(
     localModel,
     defaultLocalModel = "opus",
     providerOptions,
+    localProviderOptions,
     permissionMode,
     allowDangerouslySkipPermissions,
     effort,
@@ -109,6 +111,6 @@ export function createImpelClaudeModel(
 
   return claudeCode(
     localModel ?? inferClaudeCodeLocalModel(modelId, defaultLocalModel),
-    resolvedProviderOptions,
+    { ...resolvedProviderOptions, ...(localProviderOptions ?? {}) },
   );
 }

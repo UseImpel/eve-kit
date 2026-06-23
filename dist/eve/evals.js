@@ -12,14 +12,15 @@ export function createImpelBraintrustEvalConfig({ defaultAgentId, defaultProject
         reporters: [impelBraintrustReporter],
     });
 }
-export function createImpelSmokeEval({ defaultAgentId, defaultOrgId, message = "Reply briefly: ready.", }) {
+export function createImpelSmokeEval({ defaultAgentId, defaultOrgId, defaultAgentVersion, defaultAgentDigest = "", message = "Reply briefly: ready.", }) {
     const agentId = process.env.IMPEL_AGENT_ID ?? defaultAgentId;
     const orgId = process.env.IMPEL_ORG_ID ?? defaultOrgId;
-    const rawAgentVersion = process.env.IMPEL_AGENT_VERSION ?? "";
+    const rawAgentVersion = process.env.IMPEL_AGENT_VERSION ??
+        (defaultAgentVersion == null ? "" : String(defaultAgentVersion));
     const parsedAgentVersion = rawAgentVersion
         ? Number(rawAgentVersion)
         : Number.NaN;
-    const agentDigest = process.env.IMPEL_AGENT_DIGEST ?? "";
+    const agentDigest = process.env.IMPEL_AGENT_DIGEST ?? defaultAgentDigest;
     const metadata = {
         agentId,
         orgId,

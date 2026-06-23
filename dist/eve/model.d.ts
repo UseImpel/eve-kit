@@ -5,6 +5,7 @@ export declare const IMPEL_CLAUDE_CONTEXT_WINDOW_TOKENS = 200000;
 export declare const IMPEL_DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";
 export interface ImpelClaudeProviderOptionsInput {
     providerOptions?: ClaudeCodeSettings;
+    localProviderOptions?: ClaudeCodeSettings;
     permissionMode?: ClaudeCodeSettings["permissionMode"];
     allowDangerouslySkipPermissions?: boolean;
     effort?: ClaudeCodeSettings["effort"];
