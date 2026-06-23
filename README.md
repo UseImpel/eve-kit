@@ -10,7 +10,7 @@ the normal Eve filesystem layout: `agent.ts`, `channels/`, `sandbox/`,
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.5.tar.gz
+npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.6.tar.gz
 ```
 
 ## Eve Usage
@@ -78,6 +78,36 @@ const model = impelInference("claude-opus-4-8", {
   },
 });
 ```
+
+## Codex Eve Helper
+
+Use `createImpelCodexModel` when an Eve agent or declared subagent should run
+Codex through `impel-inference` directly, instead of constructing the generic
+provider by hand:
+
+```ts
+import {
+  createImpelCodexModel,
+  IMPEL_CODEX_CONTEXT_WINDOW_TOKENS,
+} from "@useimpel/eve-kit/eve";
+
+export default defineAgent({
+  model: createImpelCodexModel({
+    modelId: process.env.IMPEL_CODEX_MODEL_ID,
+    label: "implementation-coder",
+    providerOptions: {
+      reasoningEffort: "high",
+    },
+  }),
+  modelContextWindowTokens: IMPEL_CODEX_CONTEXT_WINDOW_TOKENS,
+});
+```
+
+The helper defaults to `IMPEL_CODEX_MODEL_ID` or `gpt-5.5`, forwards to
+`impel-inference` with `provider: "codex-cli"`, and applies the autonomous Codex
+defaults `approvalMode: "never"`, `sandboxMode: "workspace-write"`, and
+`skipGitRepoCheck: true`. Override those values only when the host runtime needs
+a stricter mode.
 
 The provider reads these environment variables by default:
 
