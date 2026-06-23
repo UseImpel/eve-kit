@@ -10,7 +10,7 @@ the normal Eve filesystem layout: `agent.ts`, `channels/`, `sandbox/`,
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.6.tar.gz
+npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.8.tar.gz
 ```
 
 ## Eve Usage
@@ -62,8 +62,10 @@ export default createImpelBraintrustEvalConfig({
 ```
 
 The helper selects `impel-inference` when `IMPEL_INFERENCE_URL` or `baseUrl` is
-configured. Otherwise it falls back to local `claudeCode(...)`, which keeps
-local Eve development usable.
+configured. Without an inference URL, local `claudeCode(...)` fallback is allowed
+only outside `NODE_ENV=production`, or when
+`IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK=true` / `allowLocalProviderFallback: true`
+is set for explicit local development.
 
 ## Root Provider
 
@@ -113,6 +115,7 @@ The provider reads these environment variables by default:
 
 - `IMPEL_INFERENCE_URL`
 - `IMPEL_INFERENCE_API_KEY`
+- `IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK`
 - `IMPEL_ORG_ID`
 - `IMPEL_RUN_REPOS`
 - `IMPEL_RUN_BRANCH`
