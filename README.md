@@ -10,7 +10,7 @@ to Eve without reshaping them.
 ## Install
 
 ```sh
-npm install github:UseImpel/ai-sdk-provider-impel-inference#v0.1.0
+npm install https://github.com/UseImpel/ai-sdk-provider-impel-inference/archive/refs/tags/v0.1.3.tar.gz
 ```
 
 ## Usage
