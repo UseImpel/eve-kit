@@ -967,5 +967,3 @@ export function impelInference(
     doStream,
   };
 }
-
-export const impelSidecar = impelInference;

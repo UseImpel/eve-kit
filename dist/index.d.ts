@@ -42,5 +42,4 @@ export interface ImpelInferenceOptions {
     provider?: string;
 }
 export declare function impelInference(modelId: string, opts?: ImpelInferenceOptions): LanguageModelV3;
-export declare const impelSidecar: typeof impelInference;
 //# sourceMappingURL=index.d.ts.map

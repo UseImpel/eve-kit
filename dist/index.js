@@ -704,5 +704,4 @@ export function impelInference(modelId, opts) {
         doStream,
     };
 }
-export const impelSidecar = impelInference;
 //# sourceMappingURL=index.js.map

@@ -1,6 +1,6 @@
 {
   "name": "@useimpel/ai-sdk-provider-impel-inference",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "AI SDK provider that routes LanguageModelV3 calls through Impel's durable inference service.",
   "type": "module",
   "repository": {
