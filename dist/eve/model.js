@@ -35,8 +35,26 @@ export function inferClaudeCodeLocalModel(modelId, fallback = "opus") {
         return "haiku";
     return fallback;
 }
+function envBoolean(name) {
+    const value = process.env[name]?.trim().toLowerCase();
+    if (!value)
+        return undefined;
+    if (["1", "true", "yes", "on"].includes(value))
+        return true;
+    if (["0", "false", "no", "off"].includes(value))
+        return false;
+    return undefined;
+}
+function allowLocalProviderFallback(explicit) {
+    if (explicit !== undefined)
+        return explicit;
+    const env = envBoolean("IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK");
+    if (env !== undefined)
+        return env;
+    return process.env.NODE_ENV !== "production";
+}
 export function createImpelClaudeModel(options = {}) {
-    const { modelId: explicitModelId, defaultModelId, localModel, defaultLocalModel = "opus", providerOptions, localProviderOptions, permissionMode, allowDangerouslySkipPermissions, effort, cwd, provider = "claude-code", ...inferenceOptions } = options;
+    const { modelId: explicitModelId, defaultModelId, localModel, defaultLocalModel = "opus", providerOptions, localProviderOptions, permissionMode, allowDangerouslySkipPermissions, effort, cwd, allowLocalProviderFallback: explicitAllowLocalProviderFallback, provider = "claude-code", ...inferenceOptions } = options;
     const modelId = resolveImpelClaudeModelId({
         modelId: explicitModelId,
         defaultModelId,
@@ -54,6 +72,9 @@ export function createImpelClaudeModel(options = {}) {
             provider,
             providerOptions: resolvedProviderOptions,
         });
+    }
+    if (!allowLocalProviderFallback(explicitAllowLocalProviderFallback)) {
+        throw new Error("IMPEL_INFERENCE_URL or baseUrl is required for createImpelClaudeModel in production. Set IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK=true only for explicit local development.");
     }
     return claudeCode(localModel ?? inferClaudeCodeLocalModel(modelId, defaultLocalModel), { ...resolvedProviderOptions, ...(localProviderOptions ?? {}) });
 }

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { impelInference } from "../dist/index.js";
-import { createImpelCodexModel } from "../dist/eve/model.js";
+import {
+  createImpelClaudeModel,
+  createImpelCodexModel,
+} from "../dist/eve/model.js";
 
 function sse(parts) {
   return new ReadableStream({
@@ -204,6 +207,41 @@ test("createImpelCodexModel routes Codex through impel-inference", async () => {
     assert.equal(requests.length, 2);
   } finally {
     globalThis.fetch = previousFetch;
+  }
+});
+
+test("createImpelClaudeModel requires impel-inference in production", () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousUrl = process.env.IMPEL_INFERENCE_URL;
+  const previousAllow = process.env.IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK;
+  process.env.NODE_ENV = "production";
+  delete process.env.IMPEL_INFERENCE_URL;
+  delete process.env.IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK;
+
+  try {
+    assert.throws(
+      () => createImpelClaudeModel(),
+      /IMPEL_INFERENCE_URL or baseUrl is required/,
+    );
+    assert.doesNotThrow(() =>
+      createImpelClaudeModel({ allowLocalProviderFallback: true }),
+    );
+  } finally {
+    if (previousNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+    if (previousUrl === undefined) {
+      delete process.env.IMPEL_INFERENCE_URL;
+    } else {
+      process.env.IMPEL_INFERENCE_URL = previousUrl;
+    }
+    if (previousAllow === undefined) {
+      delete process.env.IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK;
+    } else {
+      process.env.IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK = previousAllow;
+    }
   }
 });
 

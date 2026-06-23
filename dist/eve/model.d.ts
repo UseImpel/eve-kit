@@ -18,6 +18,7 @@ export interface ImpelClaudeModelOptions extends Omit<ImpelInferenceOptions, "pr
     defaultModelId?: string;
     localModel?: ClaudeCodeModelId;
     defaultLocalModel?: ClaudeCodeModelId;
+    allowLocalProviderFallback?: boolean;
     headers?: ImpelInferenceHeaders;
     runContext?: ImpelInferenceRunContextProvider;
 }

@@ -32,6 +32,7 @@ export interface ImpelClaudeModelOptions
   defaultModelId?: string;
   localModel?: ClaudeCodeModelId;
   defaultLocalModel?: ClaudeCodeModelId;
+  allowLocalProviderFallback?: boolean;
   headers?: ImpelInferenceHeaders;
   runContext?: ImpelInferenceRunContextProvider;
 }
@@ -114,6 +115,21 @@ export function inferClaudeCodeLocalModel(
   return fallback;
 }
 
+function envBoolean(name: string): boolean | undefined {
+  const value = process.env[name]?.trim().toLowerCase();
+  if (!value) return undefined;
+  if (["1", "true", "yes", "on"].includes(value)) return true;
+  if (["0", "false", "no", "off"].includes(value)) return false;
+  return undefined;
+}
+
+function allowLocalProviderFallback(explicit?: boolean): boolean {
+  if (explicit !== undefined) return explicit;
+  const env = envBoolean("IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK");
+  if (env !== undefined) return env;
+  return process.env.NODE_ENV !== "production";
+}
+
 export function createImpelClaudeModel(
   options: ImpelClaudeModelOptions = {},
 ): LanguageModelV3 {
@@ -128,6 +144,7 @@ export function createImpelClaudeModel(
     allowDangerouslySkipPermissions,
     effort,
     cwd,
+    allowLocalProviderFallback: explicitAllowLocalProviderFallback,
     provider = "claude-code",
     ...inferenceOptions
   } = options;
@@ -152,6 +169,12 @@ export function createImpelClaudeModel(
         unknown
       >,
     });
+  }
+
+  if (!allowLocalProviderFallback(explicitAllowLocalProviderFallback)) {
+    throw new Error(
+      "IMPEL_INFERENCE_URL or baseUrl is required for createImpelClaudeModel in production. Set IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK=true only for explicit local development.",
+    );
   }
 
   return claudeCode(
