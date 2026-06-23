@@ -1,0 +1,126 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { buildIndex } from "./index-builder.js";
+import { InMemoryVectorStore } from "./vector-store.js";
+import { evidenceGate } from "./evidence-gate.js";
+import { FlatEmbedStrategy } from "./strategies/flat-embed.js";
+import { HybridRrfStrategy } from "./strategies/hybrid-rrf.js";
+import type { Embedder, RetrievalResult, WikiDoc } from "./types.js";
+
+// Deterministic, offline embedder: hash tokens into a fixed-width vector so cosine
+// reflects token overlap. Lets the pipeline be tested end-to-end without a network
+// call or an API key — the real gateway embedder is swapped in at runtime.
+function fakeEmbedder(dims = 64): Embedder {
+  return async (texts) =>
+    texts.map((text) => {
+      const v = new Array<number>(dims).fill(0);
+      for (const token of text
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean)) {
+        let h = 0;
+        for (const ch of token) h = (h * 31 + ch.charCodeAt(0)) % dims;
+        v[h] += 1;
+      }
+      return v;
+    });
+}
+
+const docs: WikiDoc[] = [
+  {
+    path: "finance/bonds.md",
+    title: "Bonds",
+    content: "A bond pays periodic interest called a coupon until maturity.",
+    vault: "vault-a",
+  },
+  {
+    path: "marketing/brand.md",
+    title: "Brand voice",
+    content: "Our brand voice is warm and direct across every campaign.",
+    vault: "vault-a",
+  },
+  {
+    path: "ops/onboarding.md",
+    title: "Onboarding",
+    content: "New scholars complete onboarding before the first cohort week.",
+    vault: "vault-b",
+  },
+];
+
+async function deps() {
+  const embedder = fakeEmbedder();
+  const store = await buildIndex({
+    docs,
+    embedder,
+    store: new InMemoryVectorStore(),
+  });
+  return { embedder, store, docs };
+}
+
+test("flat-embed ranks the topically-right page first", async () => {
+  const strategy = new FlatEmbedStrategy(await deps());
+  const result = await strategy.retrieve({
+    query: "how does bond coupon interest work",
+  });
+  assert.equal(result.strategy, "flat-embed");
+  assert.equal(result.chunks[0]?.path, "finance/bonds.md");
+  assert.ok(result.confidence > 0 && result.confidence <= 1);
+});
+
+test("hybrid-rrf ranks the topically-right page first", async () => {
+  const strategy = new HybridRrfStrategy(await deps());
+  const result = await strategy.retrieve({
+    query: "how does bond coupon interest work",
+  });
+  assert.equal(result.strategy, "hybrid-rrf");
+  assert.equal(result.chunks[0]?.path, "finance/bonds.md");
+});
+
+test("scope filters to a single vault (both strategies)", async () => {
+  const shared = await deps();
+  for (const strategy of [
+    new FlatEmbedStrategy(shared),
+    new HybridRrfStrategy(shared),
+  ]) {
+    const result = await strategy.retrieve({
+      query: "onboarding cohort",
+      scope: { vault: "vault-a" },
+    });
+    assert.ok(result.chunks.every((c) => c.vault === "vault-a"));
+  }
+});
+
+test("k bounds the number of results", async () => {
+  const strategy = new FlatEmbedStrategy(await deps());
+  const result = await strategy.retrieve({ query: "interest", k: 1 });
+  assert.equal(result.chunks.length, 1);
+});
+
+test("evidence gate abstains with no results or low confidence", () => {
+  const empty: RetrievalResult = {
+    chunks: [],
+    confidence: 0,
+    strategy: "flat-embed",
+  };
+  assert.deepEqual(evidenceGate(empty), {
+    gated: true,
+    reason: "no_results",
+  });
+
+  const weak: RetrievalResult = {
+    chunks: [{ path: "a", title: "A", score: 0.2, snippet: "" }],
+    confidence: 0.1,
+    strategy: "flat-embed",
+  };
+  assert.deepEqual(evidenceGate(weak), {
+    gated: true,
+    reason: "low_confidence",
+  });
+
+  const strong: RetrievalResult = {
+    chunks: [{ path: "a", title: "A", score: 0.9, snippet: "" }],
+    confidence: 0.9,
+    strategy: "flat-embed",
+  };
+  assert.deepEqual(evidenceGate(strong), { gated: false });
+});
