@@ -16,7 +16,7 @@ export function defaultImpelEveChannel({
   basicUser = process.env.EVE_APP_BASIC_USER ?? process.env.IMPEL_EVE_BASIC_USER,
   basicPassword =
     process.env.EVE_APP_BASIC_PASSWORD ?? process.env.IMPEL_EVE_BASIC_PASSWORD,
-  includePlaceholderAuth = true,
+  includePlaceholderAuth = false,
 }: DefaultImpelEveChannelOptions = {}): EveChannel {
   const basic =
     basicUser && basicPassword

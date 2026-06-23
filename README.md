@@ -10,7 +10,7 @@ the normal Eve filesystem layout: `agent.ts`, `channels/`, `sandbox/`,
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.4.tar.gz
+npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.5.tar.gz
 ```
 
 ## Eve Usage
@@ -101,6 +101,12 @@ This package does not contain credentials and does not grant access to
 or `IMPEL_INFERENCE_API_KEY`; calls fail locally before `fetch` when the key is
 missing. The service also enforces the bearer token on `/v1/infer`,
 `/v1/infer/start`, and `/v1/infer/runs/:runId/stream`.
+
+The default Eve HTTP channel enables `localDev()`, `vercelOidc()`, and Basic
+auth from `EVE_APP_BASIC_USER`/`EVE_APP_BASIC_PASSWORD` or
+`IMPEL_EVE_BASIC_USER`/`IMPEL_EVE_BASIC_PASSWORD`. Eve's `placeholderAuth()` is
+not included by default because it rejects production browser requests; pass
+`includePlaceholderAuth: true` only for explicit local scaffolding.
 
 ## Eve Client Context
 
