@@ -357,6 +357,78 @@ test("retries transient provider overload before surfacing API error text", asyn
   }
 });
 
+test("surfaces structured provider errors with preceding provider text", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).endsWith("/v1/infer/start")) {
+      return new Response(
+        JSON.stringify({
+          runId: "run_auth",
+          streamUrl:
+            "/v1/infer/runs/run_auth/stream?startIndex=0&orgId=org_auth",
+        }),
+        { status: 202, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    if (
+      String(url).endsWith(
+        "/v1/infer/runs/run_auth/stream?startIndex=0&orgId=org_auth",
+      )
+    ) {
+      return new Response(
+        sse([
+          { type: "stream-start", warnings: [] },
+          { type: "response-metadata", id: "resp_auth" },
+          { type: "text-start", id: "txt_auth" },
+          {
+            type: "text-delta",
+            id: "txt_auth",
+            delta:
+              "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+          },
+          { type: "error", error: { name: "AI_LoadAPIKeyError" } },
+          "[DONE]",
+        ]),
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream",
+            "x-workflow-run-id": "run_auth",
+          },
+        },
+      );
+    }
+
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  try {
+    const model = impelInference("claude-sonnet-4-5", {
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_auth",
+    });
+
+    await assert.rejects(
+      () =>
+        model.doGenerate({
+          prompt: [{ role: "user", content: [{ type: "text", text: "report" }] }],
+        }),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.notEqual(error.message, "[object Object]");
+        assert.match(error.message, /AI_LoadAPIKeyError/);
+        assert.match(error.message, /401 Invalid authentication credentials/);
+        assert.deepEqual(error.cause, { name: "AI_LoadAPIKeyError" });
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("resumes detached stream with service cursor and org id", async () => {
   const requests = [];
   const previousFetch = globalThis.fetch;

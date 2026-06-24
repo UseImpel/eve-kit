@@ -25,14 +25,27 @@ function redactSecrets(value, seen = new WeakSet()) {
         return redactString(value);
     if (value === null || typeof value !== "object")
         return value;
+    if (seen.has(value))
+        return "[circular]";
+    seen.add(value);
     if (value instanceof Error) {
-        const error = new Error(redactString(value.message));
+        const cause = "cause" in value
+            ? redactSecrets(value.cause, seen)
+            : undefined;
+        const error = cause === undefined
+            ? new Error(redactString(value.message))
+            : new Error(redactString(value.message), { cause });
         error.name = value.name;
+        if (typeof value.stack === "string") {
+            error.stack = redactString(value.stack);
+        }
+        for (const key of Object.getOwnPropertyNames(value)) {
+            if (["message", "name", "stack", "cause"].includes(key))
+                continue;
+            error[key] = redactSecrets(value[key], seen);
+        }
         return error;
     }
-    if (seen.has(value))
-        return value;
-    seen.add(value);
     if (Array.isArray(value)) {
         return value.map((item) => redactSecrets(item, seen));
     }
@@ -44,8 +57,105 @@ function redactSecrets(value, seen = new WeakSet()) {
 function redactStreamPart(part) {
     return redactSecrets(part);
 }
+function safeJsonStringify(value) {
+    try {
+        return JSON.stringify(value);
+    }
+    catch {
+        return undefined;
+    }
+}
+function stringField(value, key) {
+    const field = value[key];
+    return typeof field === "string" && field.trim() !== ""
+        ? field
+        : undefined;
+}
+function errorMessageFromValue(value, fallback) {
+    if (value instanceof Error) {
+        const name = value.name && value.name !== "Error" ? value.name : undefined;
+        if (value.message && name && !value.message.includes(name)) {
+            return `${name}: ${value.message}`;
+        }
+        return value.message || name || fallback;
+    }
+    if (typeof value === "string")
+        return value || fallback;
+    if (value && typeof value === "object") {
+        const record = value;
+        const name = stringField(record, "name");
+        const message = stringField(record, "message");
+        if (message && name && !message.includes(name)) {
+            return `${name}: ${message}`;
+        }
+        if (message)
+            return message;
+        const nested = record.error;
+        if (nested && typeof nested === "object") {
+            const nestedMessage = errorMessageFromValue(nested, "");
+            if (nestedMessage)
+                return nestedMessage;
+        }
+        else if (typeof nested === "string" && nested.trim() !== "") {
+            return nested;
+        }
+        const responseBody = record.responseBody ?? record.body ?? record.data;
+        const responseText = typeof responseBody === "string"
+            ? responseBody
+            : responseBody == null
+                ? undefined
+                : safeJsonStringify(responseBody);
+        if (responseText && responseText !== "{}") {
+            return name ? `${name}: ${responseText}` : responseText;
+        }
+        const keys = Object.keys(record).filter((key) => record[key] !== undefined);
+        if (name && keys.length === 1)
+            return name;
+        const json = safeJsonStringify(value);
+        if (json && json !== "{}")
+            return json;
+        if (name)
+            return name;
+    }
+    const asString = String(value);
+    return asString && asString !== "[object Object]" ? asString : fallback;
+}
+function textContent(content) {
+    return content
+        .map((part) => part.type === "text" || part.type === "reasoning" ? part.text : "")
+        .join("")
+        .trim();
+}
+function errorFromUnknown(error, fallback, context) {
+    const redacted = redactSecrets(error);
+    let message = errorMessageFromValue(redacted, fallback);
+    const partialOutput = context?.partialOutput?.trim();
+    if (partialOutput) {
+        const redactedPartial = redactString(partialOutput).slice(0, 1000);
+        if (redactedPartial && !message.includes(redactedPartial)) {
+            message += `; partial provider output: ${redactedPartial}`;
+        }
+    }
+    const cause = redacted instanceof Error &&
+        "cause" in redacted &&
+        redacted.cause !== undefined
+        ? redacted.cause
+        : redacted;
+    const normalized = new Error(redactString(message).slice(0, 2000), {
+        cause,
+    });
+    if (redacted instanceof Error) {
+        normalized.name = redacted.name;
+    }
+    else if (redacted && typeof redacted === "object") {
+        const name = stringField(redacted, "name");
+        if (name)
+            normalized.name = name;
+    }
+    return normalized;
+}
 function redactedError(error) {
-    return redactSecrets(error);
+    return errorFromUnknown(error, "impel-inference provider error");
 }
 function headersInitToRecord(headers) {
     if (!headers)
@@ -495,11 +605,12 @@ export function impelInference(modelId, opts) {
                                             retryTransient = true;
                                             break;
                                         }
+                                        const partialOutput = heldText;
                                         flushHeldTextParts();
                                         sawProviderError = true;
                                         enqueuePart({
                                             type: "error",
-                                            error: redactedError(chunk.error),
+                                            error: errorFromUnknown(chunk.error, "impel-inference stream parse error", { partialOutput }),
                                         });
                                         continue;
                                     }
@@ -561,9 +672,13 @@ export function impelInference(modelId, opts) {
                                             retryTransient = true;
                                             break;
                                         }
+                                        const partialOutput = heldText;
                                         flushHeldTextParts();
                                         sawProviderError = true;
-                                        enqueuePart(part);
+                                        enqueuePart({
+                                            ...part,
+                                            error: errorFromUnknown(part.error, "impel-inference provider error", { partialOutput }),
+                                        });
                                         continue;
                                     }
                                     flushHeldTextParts();
@@ -703,9 +818,7 @@ export function impelInference(modelId, opts) {
                         usage = part.usage;
                         break;
                     case "error":
-                        throw part.error instanceof Error
-                            ? part.error
-                            : new Error(String(part.error));
+                        throw errorFromUnknown(part.error, "impel-inference provider error", { partialOutput: textContent(content) });
                     default:
                         break;
                 }
