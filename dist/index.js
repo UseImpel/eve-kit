@@ -57,6 +57,11 @@ function redactSecrets(value, seen = new WeakSet()) {
 function redactStreamPart(part) {
     return redactSecrets(part);
 }
+function isReasoningStreamPart(part) {
+    return (part.type === "reasoning-start" ||
+        part.type === "reasoning-delta" ||
+        part.type === "reasoning-end");
+}
 function safeJsonStringify(value) {
     try {
         return JSON.stringify(value);
@@ -462,6 +467,7 @@ function requireConfigured(name, value) {
 export function impelInference(modelId, opts) {
     const constructorProviderOptions = opts?.providerOptions ?? {};
     const label = opts?.label ?? "impel-inference";
+    const streamReasoning = opts?.streamReasoning === true;
     async function doStream(options) {
         const baseUrl = requireConfigured("IMPEL_INFERENCE_URL", opts?.baseUrl ?? process.env.IMPEL_INFERENCE_URL).replace(/\/$/, "");
         const apiKey = requireConfigured("IMPEL_INFERENCE_API_KEY", opts?.apiKey ?? process.env.IMPEL_INFERENCE_API_KEY);
@@ -616,6 +622,9 @@ export function impelInference(modelId, opts) {
                                     }
                                     sawUpstreamPart = true;
                                     const part = redactStreamPart(chunk.value);
+                                    if (!streamReasoning && isReasoningStreamPart(part)) {
+                                        continue;
+                                    }
                                     if (part.type === "stream-start") {
                                         if (sawStreamStart)
                                             continue;

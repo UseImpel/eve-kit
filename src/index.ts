@@ -36,6 +36,13 @@ export interface ImpelInferenceOptions {
   apiKey?: string;
   orgId?: string;
   /**
+   * Forward reasoning stream parts to the AI SDK caller. Defaults to false
+   * because long provider-managed agent loops can occasionally emit reasoning
+   * block lifecycles that current AI SDK beta stream accumulators reject. Raw
+   * reasoning remains available in impel-inference provider traces.
+   */
+  streamReasoning?: boolean;
+  /**
    * Provider construction options for the provider reconstructed inside
    * impel-inference, for example claudeCode permissionMode, maxTurns, agents,
    * and effort.
@@ -154,6 +161,14 @@ function redactSecrets(
 
 function redactStreamPart(part: ParsedStreamPart): LanguageModelV3StreamPart {
   return redactSecrets(part) as LanguageModelV3StreamPart;
+}
+
+function isReasoningStreamPart(part: LanguageModelV3StreamPart): boolean {
+  return (
+    part.type === "reasoning-start" ||
+    part.type === "reasoning-delta" ||
+    part.type === "reasoning-end"
+  );
 }
 
 function safeJsonStringify(value: unknown): string | undefined {
@@ -695,6 +710,7 @@ export function impelInference(
 ): LanguageModelV3 {
   const constructorProviderOptions = opts?.providerOptions ?? {};
   const label = opts?.label ?? "impel-inference";
+  const streamReasoning = opts?.streamReasoning === true;
 
   async function doStream(options: LanguageModelV3CallOptions) {
     const baseUrl = requireConfigured(
@@ -894,6 +910,10 @@ export function impelInference(
 
                   sawUpstreamPart = true;
                   const part = redactStreamPart(chunk.value);
+                  if (!streamReasoning && isReasoningStreamPart(part)) {
+                    continue;
+                  }
+
                   if (part.type === "stream-start") {
                     if (sawStreamStart) continue;
                     sawStreamStart = true;

@@ -10,7 +10,7 @@ the normal Eve filesystem layout: `agent.ts`, `channels/`, `sandbox/`,
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.9.tar.gz
+npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.11.tar.gz
 ```
 
 ## Eve Usage
@@ -80,6 +80,15 @@ const model = impelInference("claude-opus-4-8", {
   },
 });
 ```
+
+By default, `impelInference()` does not forward AI SDK reasoning stream parts to
+the caller. The full raw reasoning stream is still recorded in
+`impel-inference` provider traces, while the model stream remains stable across
+long provider-managed CLI agent loops. Set `streamReasoning: true` only for
+callers that specifically need reasoning parts and can tolerate AI SDK beta
+reasoning lifecycle strictness.
+This is intended for provider-managed CLI loops where the AI SDK caller is not
+responsible for replaying reasoning blocks back to the model.
 
 ## Codex Eve Helper
 

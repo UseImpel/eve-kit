@@ -15,6 +15,13 @@ export interface ImpelInferenceOptions {
     apiKey?: string;
     orgId?: string;
     /**
+     * Forward reasoning stream parts to the AI SDK caller. Defaults to false
+     * because long provider-managed agent loops can occasionally emit reasoning
+     * block lifecycles that current AI SDK beta stream accumulators reject. Raw
+     * reasoning remains available in impel-inference provider traces.
+     */
+    streamReasoning?: boolean;
+    /**
      * Provider construction options for the provider reconstructed inside
      * impel-inference, for example claudeCode permissionMode, maxTurns, agents,
      * and effort.

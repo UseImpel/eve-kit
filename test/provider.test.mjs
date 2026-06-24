@@ -36,6 +36,36 @@ function promptWithClientContext(context) {
   ];
 }
 
+async function readStreamParts(model) {
+  const { stream } = await model.doStream({ prompt: [] });
+  const reader = stream.getReader();
+  const parts = [];
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return parts;
+}
+
+function finishPart() {
+  return {
+    type: "finish",
+    finishReason: { unified: "stop", raw: "completed" },
+    usage: {
+      inputTokens: {},
+      outputTokens: {},
+    },
+    providerMetadata: {
+      "claude-code": { terminalReason: "completed" },
+    },
+  };
+}
+
 test("streams from /start and forwards auth, trace headers, and Eve clientContext", async () => {
   const requests = [];
   const previousFetch = globalThis.fetch;
@@ -124,6 +154,126 @@ test("streams from /start and forwards auth, trace headers, and Eve clientContex
     assert.equal(result.content[0].text, "ready");
     assert.equal(result.finishReason.unified, "stop");
     assert.equal(requests.length, 2);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("filters reasoning stream parts by default", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/v1/infer/start")) {
+      return new Response(
+        JSON.stringify({
+          runId: "run_reasoning",
+          streamUrl:
+            "/v1/infer/runs/run_reasoning/stream?startIndex=0&orgId=org_default",
+        }),
+        { status: 202, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    if (
+      String(url).endsWith(
+        "/v1/infer/runs/run_reasoning/stream?startIndex=0&orgId=org_default",
+      )
+    ) {
+      return new Response(
+        sse([
+          { type: "stream-start", warnings: [] },
+          { type: "reasoning-start", id: "rsn" },
+          { type: "reasoning-delta", id: "rsn", delta: "thinking" },
+          { type: "reasoning-end", id: "rsn" },
+          { type: "text-start", id: "txt" },
+          { type: "text-delta", id: "txt", delta: "ready" },
+          { type: "text-end", id: "txt" },
+          finishPart(),
+          "[DONE]",
+        ]),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    }
+
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  try {
+    const model = impelInference("claude-opus-4-8", {
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_default",
+    });
+
+    const parts = await readStreamParts(model);
+    assert.deepEqual(
+      parts.map((part) => part.type),
+      ["stream-start", "text-start", "text-delta", "text-end", "finish"],
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("can opt in to forwarding reasoning stream parts", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/v1/infer/start")) {
+      return new Response(
+        JSON.stringify({
+          runId: "run_reasoning_opt_in",
+          streamUrl:
+            "/v1/infer/runs/run_reasoning_opt_in/stream?startIndex=0&orgId=org_default",
+        }),
+        { status: 202, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    if (
+      String(url).endsWith(
+        "/v1/infer/runs/run_reasoning_opt_in/stream?startIndex=0&orgId=org_default",
+      )
+    ) {
+      return new Response(
+        sse([
+          { type: "stream-start", warnings: [] },
+          { type: "reasoning-start", id: "rsn" },
+          { type: "reasoning-delta", id: "rsn", delta: "thinking" },
+          { type: "reasoning-end", id: "rsn" },
+          { type: "text-start", id: "txt" },
+          { type: "text-delta", id: "txt", delta: "ready" },
+          { type: "text-end", id: "txt" },
+          finishPart(),
+          "[DONE]",
+        ]),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    }
+
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  try {
+    const model = impelInference("claude-opus-4-8", {
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_default",
+      streamReasoning: true,
+    });
+
+    const parts = await readStreamParts(model);
+    assert.deepEqual(
+      parts.map((part) => part.type),
+      [
+        "stream-start",
+        "reasoning-start",
+        "reasoning-delta",
+        "reasoning-end",
+        "text-start",
+        "text-delta",
+        "text-end",
+        "finish",
+      ],
+    );
   } finally {
     globalThis.fetch = previousFetch;
   }
