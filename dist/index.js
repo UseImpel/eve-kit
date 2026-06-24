@@ -1,3 +1,4 @@
+import { JSONParseError } from "@ai-sdk/provider";
 import { parseJsonEventStream, } from "@ai-sdk/provider-utils";
 import { z } from "zod";
 const streamPartSchema = z.object({ type: z.string() }).passthrough();
@@ -332,6 +333,12 @@ function isTransientProviderError({ error, heldText, }) {
         /rate.?limit/i.test(text) ||
         /\b(?:econnreset|etimedout|timeout)\b/i.test(text));
 }
+function isJsonParseStreamError(error) {
+    if (JSONParseError.isInstance(error))
+        return true;
+    const text = stringifyErrorLike(error);
+    return /AI_JSONParseError|JSON parsing failed/i.test(text);
+}
 function isUserVisibleStreamPart(part) {
     return ![
         "stream-start",
@@ -550,6 +557,7 @@ export function impelInference(modelId, opts) {
         let inferenceRunId = initial.runId;
         const maxResumeAttempts = envNumber("IMPEL_INFERENCE_RESUME_MAX_ATTEMPTS", 20);
         const resumeDelayMs = envNumber("IMPEL_INFERENCE_RESUME_DELAY_MS", 1000);
+        const maxParseResumeAttempts = envNumber("IMPEL_INFERENCE_PARSE_RESUME_MAX_ATTEMPTS", 3);
         const maxTransientAttempts = envNumber("IMPEL_INFERENCE_TRANSIENT_MAX_ATTEMPTS", 2);
         const transientDelayMs = envNumber("IMPEL_INFERENCE_TRANSIENT_RETRY_DELAY_MS", 1500);
         let upstreamReader;
@@ -562,6 +570,8 @@ export function impelInference(modelId, opts) {
                     let resumeStartIndex = initial.nextStartIndex ?? 0;
                     let skipAlreadySeen = 0;
                     let resumeAttempts = 0;
+                    let parseResumeAttempts = 0;
+                    let lastParseResumeStartIndex;
                     let transientAttempts = 0;
                     let heldTextParts = [];
                     let heldText = "";
@@ -590,6 +600,8 @@ export function impelInference(modelId, opts) {
                             let streamClosed = false;
                             let partsSeenThisConnection = 0;
                             let retryTransient = false;
+                            let retryResume = false;
+                            const hasServiceCursor = current.nextStartIndex !== undefined;
                             try {
                                 for (;;) {
                                     const { done, value: chunk } = await upstreamReader.read();
@@ -601,6 +613,15 @@ export function impelInference(modelId, opts) {
                                         continue;
                                     upstreamPartCount += 1;
                                     if (!chunk.success) {
+                                        if (isJsonParseStreamError(chunk.error) &&
+                                            inferenceRunId &&
+                                            hasServiceCursor &&
+                                            parseResumeAttempts < maxParseResumeAttempts &&
+                                            lastParseResumeStartIndex !== resumeStartIndex &&
+                                            resumeAttempts < maxResumeAttempts) {
+                                            retryResume = true;
+                                            break;
+                                        }
                                         const transient = isTransientProviderError({
                                             error: chunk.error,
                                             heldText,
@@ -706,10 +727,31 @@ export function impelInference(modelId, opts) {
                                 upstreamPartCount = 0;
                                 skipAlreadySeen = 0;
                                 resumeAttempts = 0;
+                                parseResumeAttempts = 0;
+                                lastParseResumeStartIndex = undefined;
                                 await sleep(transientDelayMs * transientAttempts);
                                 const restarted = await createInferenceRun();
                                 inferenceRunId = restarted.runId;
                                 current = restarted;
+                                continue;
+                            }
+                            if (retryResume && inferenceRunId) {
+                                const runId = inferenceRunId;
+                                resumeAttempts += 1;
+                                parseResumeAttempts += 1;
+                                await sleep(resumeDelayMs * Math.min(resumeAttempts, 5));
+                                const startIndex = resumeStartIndex;
+                                lastParseResumeStartIndex = startIndex;
+                                skipAlreadySeen = startIndex === 0 ? upstreamPartCount : 0;
+                                const resumed = await openInferenceStream({
+                                    url: `${baseUrl}/v1/infer/runs/` +
+                                        `${encodeURIComponent(runId)}/stream?startIndex=${startIndex}` +
+                                        `&orgId=${encodeURIComponent(orgId)}`,
+                                    headers,
+                                });
+                                inferenceRunId = resumed.runId ?? runId;
+                                resumeStartIndex = resumed.nextStartIndex ?? startIndex;
+                                current = resumed;
                                 continue;
                             }
                             if (pendingFinish) {
