@@ -15,6 +15,11 @@ export interface ImpelInferenceOptions {
     apiKey?: string;
     orgId?: string;
     /**
+     * workflow: start a durable /v1/infer run and tail it.
+     * model-stream: call hosted /v1/model/stream directly.
+     */
+    transport?: "workflow" | "model-stream";
+    /**
      * Forward reasoning stream parts to the AI SDK caller. Defaults to false
      * because long provider-managed agent loops can occasionally emit reasoning
      * block lifecycles that current AI SDK beta stream accumulators reject. Raw

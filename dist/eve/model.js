@@ -4,6 +4,7 @@ export const IMPEL_CLAUDE_CONTEXT_WINDOW_TOKENS = 200000;
 export const IMPEL_DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";
 export const IMPEL_CODEX_CONTEXT_WINDOW_TOKENS = 200000;
 export const IMPEL_DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
+export const IMPEL_DEFAULT_OPENAI_RESPONSES_MODEL_ID = IMPEL_DEFAULT_CODEX_MODEL_ID;
 export function createImpelClaudeProviderOptions({ providerOptions, permissionMode = "bypassPermissions", allowDangerouslySkipPermissions = true, effort, cwd, } = {}) {
     return {
         permissionMode,
@@ -27,6 +28,12 @@ export function createImpelCodexProviderOptions({ providerOptions, approvalMode 
 }
 export function resolveImpelCodexModelId({ modelId, defaultModelId = IMPEL_DEFAULT_CODEX_MODEL_ID, } = {}) {
     return modelId ?? process.env.IMPEL_CODEX_MODEL_ID ?? defaultModelId;
+}
+export function resolveImpelOpenAIResponsesModelId({ modelId, defaultModelId = IMPEL_DEFAULT_OPENAI_RESPONSES_MODEL_ID, } = {}) {
+    return (modelId ??
+        process.env.IMPEL_OPENAI_RESPONSES_MODEL_ID ??
+        process.env.IMPEL_CODEX_MODEL_ID ??
+        defaultModelId);
 }
 export function inferClaudeCodeLocalModel(modelId, fallback = "opus") {
     if (/sonnet/i.test(modelId))
@@ -128,14 +135,15 @@ export function createImpelClaudeModel(options = {}) {
     return claudeCode(localModel ?? inferClaudeCodeLocalModel(modelId, defaultLocalModel), { ...resolvedProviderOptions, ...(localProviderOptions ?? {}) });
 }
 export function createImpelCodexModel(options = {}) {
-    const { modelId: explicitModelId, defaultModelId, providerOptions, approvalMode, sandboxMode, skipGitRepoCheck, effort, ...inferenceOptions } = options;
+    const { modelId: explicitModelId, defaultModelId, providerOptions, approvalMode, sandboxMode, skipGitRepoCheck, effort, transport = "model-stream", ...inferenceOptions } = options;
     const modelId = resolveImpelCodexModelId({
         modelId: explicitModelId,
         defaultModelId,
     });
     return impelInference(modelId, {
         ...inferenceOptions,
-        provider: "codex-cli",
+        transport,
+        provider: transport === "model-stream" ? "codex-app-server" : "codex-cli",
         providerOptions: createImpelCodexProviderOptions({
             providerOptions,
             approvalMode,
@@ -143,6 +151,17 @@ export function createImpelCodexModel(options = {}) {
             skipGitRepoCheck,
             effort,
         }),
+    });
+}
+export function createImpelOpenAIResponsesModel(options = {}) {
+    return createImpelCodexModel({
+        ...options,
+        defaultModelId: options.defaultModelId ?? IMPEL_DEFAULT_OPENAI_RESPONSES_MODEL_ID,
+        modelId: resolveImpelOpenAIResponsesModelId({
+            modelId: options.modelId,
+            defaultModelId: options.defaultModelId ?? IMPEL_DEFAULT_OPENAI_RESPONSES_MODEL_ID,
+        }),
+        transport: options.transport ?? "model-stream",
     });
 }
 //# sourceMappingURL=model.js.map

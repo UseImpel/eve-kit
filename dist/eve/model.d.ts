@@ -5,6 +5,7 @@ export declare const IMPEL_CLAUDE_CONTEXT_WINDOW_TOKENS = 200000;
 export declare const IMPEL_DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";
 export declare const IMPEL_CODEX_CONTEXT_WINDOW_TOKENS = 200000;
 export declare const IMPEL_DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
+export declare const IMPEL_DEFAULT_OPENAI_RESPONSES_MODEL_ID = "gpt-5.5";
 export interface ImpelClaudeProviderOptionsInput {
     providerOptions?: ClaudeCodeSettings;
     localProviderOptions?: ClaudeCodeSettings;
@@ -35,6 +36,8 @@ export interface ImpelCodexModelOptions extends Omit<ImpelInferenceOptions, "pro
     headers?: ImpelInferenceHeaders;
     runContext?: ImpelInferenceRunContextProvider;
 }
+export interface ImpelOpenAIResponsesModelOptions extends ImpelCodexModelOptions {
+}
 export declare function createImpelClaudeProviderOptions({ providerOptions, permissionMode, allowDangerouslySkipPermissions, effort, cwd, }?: ImpelClaudeProviderOptionsInput): ClaudeCodeSettings;
 export declare function resolveImpelClaudeModelId({ modelId, defaultModelId, }?: {
     modelId?: string;
@@ -45,7 +48,12 @@ export declare function resolveImpelCodexModelId({ modelId, defaultModelId, }?: 
     modelId?: string;
     defaultModelId?: string;
 }): string;
+export declare function resolveImpelOpenAIResponsesModelId({ modelId, defaultModelId, }?: {
+    modelId?: string;
+    defaultModelId?: string;
+}): string;
 export declare function inferClaudeCodeLocalModel(modelId: string, fallback?: ClaudeCodeModelId): ClaudeCodeModelId;
 export declare function createImpelClaudeModel(options?: ImpelClaudeModelOptions): LanguageModelV3;
 export declare function createImpelCodexModel(options?: ImpelCodexModelOptions): LanguageModelV3;
+export declare function createImpelOpenAIResponsesModel(options?: ImpelOpenAIResponsesModelOptions): LanguageModelV3;
 //# sourceMappingURL=model.d.ts.map
