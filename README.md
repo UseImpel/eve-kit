@@ -67,6 +67,12 @@ only outside `NODE_ENV=production`, or when
 `IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK=true` / `allowLocalProviderFallback: true`
 is set for explicit local development.
 
+Claude uses the durable `/v1/infer` workflow transport by default. Set
+`IMPEL_CLAUDE_TRANSPORT=model-stream` or pass `transport: "model-stream"` to opt
+into the hosted Claude Code gateway path, where `impel-inference` runs
+`claudeCode()` in-process and owns Claude access-token resolution/refresh
+centrally instead of seeding a sandbox credential file.
+
 ## Root Provider
 
 ```ts
@@ -134,6 +140,7 @@ The provider reads these environment variables by default:
 
 - `IMPEL_INFERENCE_URL`
 - `IMPEL_INFERENCE_API_KEY`
+- `IMPEL_CLAUDE_TRANSPORT` (`model-stream` or `workflow`)
 - `IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK`
 - `IMPEL_ORG_ID`
 - `IMPEL_RUN_REPOS`

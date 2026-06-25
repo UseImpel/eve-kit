@@ -474,6 +474,73 @@ test("createImpelClaudeModel requires impel-inference in production", () => {
   }
 });
 
+test("createImpelClaudeModel can opt into hosted model-stream transport via env", async () => {
+  const requests = [];
+  const previousFetch = globalThis.fetch;
+  const previousUrl = process.env.IMPEL_INFERENCE_URL;
+  const previousKey = process.env.IMPEL_INFERENCE_API_KEY;
+  const previousOrg = process.env.IMPEL_ORG_ID;
+  const previousTransport = process.env.IMPEL_CLAUDE_TRANSPORT;
+
+  process.env.IMPEL_INFERENCE_URL = "https://inference.test";
+  process.env.IMPEL_INFERENCE_API_KEY = "secret";
+  process.env.IMPEL_ORG_ID = "org_env";
+  process.env.IMPEL_CLAUDE_TRANSPORT = "model-stream";
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+    assert.equal(String(url), "https://inference.test/v1/model/stream");
+    assert.equal(init.headers.authorization, "Bearer secret");
+    const body = JSON.parse(String(init.body));
+    assert.equal(body.provider, "claude-code");
+    assert.equal(body.modelId, "claude-sonnet-4-5");
+    assert.equal(body.orgId, "org_env");
+    return new Response(
+      sse([
+        { type: "stream-start", warnings: [] },
+        { type: "text-start", id: "txt" },
+        { type: "text-delta", id: "txt", delta: "hosted" },
+        { type: "text-end", id: "txt" },
+        finishPart(),
+        "[DONE]",
+      ]),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  };
+
+  try {
+    const model = createImpelClaudeModel({ modelId: "claude-sonnet-4-5" });
+    const parts = await readStreamParts(model);
+
+    assert.equal(requests.length, 1);
+    assert.equal(
+      parts.find((part) => part.type === "text-delta")?.delta,
+      "hosted",
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousUrl === undefined) {
+      delete process.env.IMPEL_INFERENCE_URL;
+    } else {
+      process.env.IMPEL_INFERENCE_URL = previousUrl;
+    }
+    if (previousKey === undefined) {
+      delete process.env.IMPEL_INFERENCE_API_KEY;
+    } else {
+      process.env.IMPEL_INFERENCE_API_KEY = previousKey;
+    }
+    if (previousOrg === undefined) {
+      delete process.env.IMPEL_ORG_ID;
+    } else {
+      process.env.IMPEL_ORG_ID = previousOrg;
+    }
+    if (previousTransport === undefined) {
+      delete process.env.IMPEL_CLAUDE_TRANSPORT;
+    } else {
+      process.env.IMPEL_CLAUDE_TRANSPORT = previousTransport;
+    }
+  }
+});
+
 test("retries transient provider overload before surfacing API error text", async () => {
   const requests = [];
   const previousFetch = globalThis.fetch;

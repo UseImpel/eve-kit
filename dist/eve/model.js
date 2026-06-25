@@ -82,8 +82,15 @@ function allowLocalProviderFallback(explicit) {
         return env;
     return process.env.NODE_ENV !== "production";
 }
+function resolveClaudeTransport(explicit) {
+    if (explicit)
+        return explicit;
+    const value = process.env.IMPEL_CLAUDE_TRANSPORT?.trim();
+    return value === "model-stream" || value === "workflow" ? value : undefined;
+}
 export function createImpelClaudeModel(options = {}) {
     const { modelId: explicitModelId, defaultModelId, localModel, defaultLocalModel = "opus", providerOptions, localProviderOptions, permissionMode, allowDangerouslySkipPermissions, effort, cwd, allowLocalProviderFallback: explicitAllowLocalProviderFallback, provider = "claude-code", ...inferenceOptions } = options;
+    const transport = resolveClaudeTransport(inferenceOptions.transport);
     const modelId = resolveImpelClaudeModelId({
         modelId: explicitModelId,
         defaultModelId,
@@ -98,6 +105,7 @@ export function createImpelClaudeModel(options = {}) {
     if (inferenceOptions.baseUrl ?? process.env.IMPEL_INFERENCE_URL) {
         return impelInference(modelId, {
             ...inferenceOptions,
+            ...(transport ? { transport } : {}),
             provider,
             providerOptions: resolvedProviderOptions,
         });

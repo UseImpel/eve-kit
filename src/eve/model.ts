@@ -174,6 +174,14 @@ function allowLocalProviderFallback(explicit?: boolean): boolean {
   return process.env.NODE_ENV !== "production";
 }
 
+function resolveClaudeTransport(
+  explicit: ImpelInferenceOptions["transport"] | undefined,
+): ImpelInferenceOptions["transport"] | undefined {
+  if (explicit) return explicit;
+  const value = process.env.IMPEL_CLAUDE_TRANSPORT?.trim();
+  return value === "model-stream" || value === "workflow" ? value : undefined;
+}
+
 export function createImpelClaudeModel(
   options: ImpelClaudeModelOptions = {},
 ): LanguageModelV3 {
@@ -192,6 +200,7 @@ export function createImpelClaudeModel(
     provider = "claude-code",
     ...inferenceOptions
   } = options;
+  const transport = resolveClaudeTransport(inferenceOptions.transport);
   const modelId = resolveImpelClaudeModelId({
     modelId: explicitModelId,
     defaultModelId,
@@ -207,6 +216,7 @@ export function createImpelClaudeModel(
   if (inferenceOptions.baseUrl ?? process.env.IMPEL_INFERENCE_URL) {
     return impelInference(modelId, {
       ...inferenceOptions,
+      ...(transport ? { transport } : {}),
       provider,
       providerOptions: resolvedProviderOptions as unknown as Record<
         string,
