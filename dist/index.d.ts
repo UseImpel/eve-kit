@@ -15,8 +15,10 @@ export interface ImpelInferenceOptions {
     apiKey?: string;
     orgId?: string;
     /**
-     * workflow: start a durable /v1/infer run and tail it.
-     * model-stream: call hosted /v1/model/stream directly.
+     * model-stream: call hosted /v1/model/stream directly. This is the default
+     * path for Eve-native agents because it behaves like a regular AI SDK
+     * provider and keeps provider credential refresh centralized.
+     * workflow: start an older durable /v1/infer run and tail it.
      */
     transport?: "workflow" | "model-stream";
     /**
