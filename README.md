@@ -10,7 +10,7 @@ the normal Eve filesystem layout: `agent.ts`, `channels/`, `sandbox/`,
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.11.tar.gz
+npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.15.tar.gz
 ```
 
 ## Eve Usage
@@ -67,11 +67,18 @@ only outside `NODE_ENV=production`, or when
 `IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK=true` / `allowLocalProviderFallback: true`
 is set for explicit local development.
 
-Claude uses the durable `/v1/infer` workflow transport by default. Set
-`IMPEL_CLAUDE_TRANSPORT=model-stream` or pass `transport: "model-stream"` to opt
-into the hosted Claude Code gateway path, where `impel-inference` runs
-`claudeCode()` in-process and owns Claude access-token resolution/refresh
-centrally instead of seeding a sandbox credential file.
+Claude uses the hosted `/v1/model/stream` transport by default. That path routes
+through the Claude Code gateway, where `impel-inference` owns Claude access-token
+resolution/refresh centrally instead of seeding a sandbox credential file.
+
+Set `IMPEL_CLAUDE_TRANSPORT=workflow` or pass `transport: "workflow"` only when
+you need the older durable `/v1/infer` sandbox path:
+
+```ts
+createImpelClaudeModel({
+  transport: "workflow",
+});
+```
 
 ## Root Provider
 
