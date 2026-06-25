@@ -1,4 +1,5 @@
 import { JSONParseError } from "@ai-sdk/provider";
+import { context, propagation } from "@opentelemetry/api";
 import { parseJsonEventStream, } from "@ai-sdk/provider-utils";
 import { z } from "zod";
 const streamPartSchema = z.object({ type: z.string() }).passthrough();
@@ -175,13 +176,21 @@ async function resolveExtraHeaders(headers) {
     return headersInitToRecord(resolved);
 }
 async function inferenceHeaders({ apiKey, orgId, extraHeaders, }) {
-    return {
+    const headers = {
         ...(await resolveExtraHeaders(extraHeaders)),
         authorization: `Bearer ${apiKey}`,
         "x-org-id": orgId,
         "x-impel-org-id": orgId,
         "content-type": "application/json",
     };
+    // Propagate the caller's active trace context as a W3C `traceparent` so
+    // impel-inference can re-root its tool-loop spans under the hosted eve agent's
+    // `ai.eve.turn` trace — unifying the agent-service and inference spans into one
+    // trace (impel-inference lib/tool-spans.ts re-extracts this carrier as the root
+    // context for every tool span). No-op when the caller has no OTel provider /
+    // W3C propagator active, so it's safe in non-instrumented callers.
+    propagation.inject(context.active(), headers);
+    return headers;
 }
 function parseStreamTailIndex(response) {
     const value = response.headers.get("x-workflow-stream-tail-index");
