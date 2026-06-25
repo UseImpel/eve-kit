@@ -37,6 +37,11 @@ export interface ImpelInferenceOptions {
   apiKey?: string;
   orgId?: string;
   /**
+   * workflow: start a durable /v1/infer run and tail it.
+   * model-stream: call hosted /v1/model/stream directly.
+   */
+  transport?: "workflow" | "model-stream";
+  /**
    * Forward reasoning stream parts to the AI SDK caller. Defaults to false
    * because long provider-managed agent loops can occasionally emit reasoning
    * block lifecycles that current AI SDK beta stream accumulators reject. Raw
@@ -458,7 +463,8 @@ function rejectedFinishMessage({
 
   const claude = providerMetadata(part, "claude-code");
   const codex = providerMetadata(part, "codex-cli");
-  const metadata = claude ?? codex;
+  const codexAppServer = providerMetadata(part, "codex-app-server");
+  const metadata = claude ?? codex ?? codexAppServer;
   const terminalReason =
     typeof metadata?.terminalReason === "string"
       ? metadata.terminalReason
@@ -795,6 +801,15 @@ export function impelInference(
     });
 
     async function createInferenceRun(): Promise<InferenceStream> {
+      if (opts?.transport === "model-stream") {
+        return await openInferenceStream({
+          url: `${baseUrl}/v1/model/stream`,
+          headers,
+          body,
+          method: "POST",
+        });
+      }
+
       try {
         return await startInferenceStream({ baseUrl, headers, body, orgId });
       } catch (error) {

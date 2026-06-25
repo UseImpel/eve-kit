@@ -299,7 +299,72 @@ test("fails locally when no inference api key is configured", async () => {
   );
 });
 
-test("createImpelCodexModel routes Codex through impel-inference", async () => {
+test("createImpelCodexModel uses hosted model stream by default", async () => {
+  const requests = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+
+    if (String(url).endsWith("/v1/model/stream")) {
+      const body = JSON.parse(String(init.body));
+      assert.equal(body.provider, "codex-app-server");
+      assert.equal(body.modelId, "gpt-5.5");
+      assert.equal(body.orgId, "org_codex");
+      assert.equal(body.providerOptions.approvalMode, "never");
+      assert.equal(body.providerOptions.sandboxMode, "workspace-write");
+      assert.equal(body.providerOptions.skipGitRepoCheck, true);
+      assert.equal(body.providerOptions.reasoningEffort, "high");
+      return new Response(
+        sse([
+          { type: "stream-start", warnings: [] },
+          { type: "text-start", id: "txt" },
+          { type: "text-delta", id: "txt", delta: "coded" },
+          { type: "text-end", id: "txt" },
+          {
+            type: "finish",
+            finishReason: { unified: "stop", raw: "completed" },
+            usage: {
+              inputTokens: {},
+              outputTokens: {},
+            },
+            providerMetadata: {
+              "codex-app-server": { terminalReason: "completed" },
+            },
+          },
+          "[DONE]",
+        ]),
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream",
+            "x-workflow-run-id": "run_codex",
+          },
+        },
+      );
+    }
+
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  try {
+    const model = createImpelCodexModel({
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_codex",
+      providerOptions: { reasoningEffort: "high" },
+    });
+
+    const result = await model.doGenerate({ prompt: [] });
+
+    assert.equal(result.content[0].type, "text");
+    assert.equal(result.content[0].text, "coded");
+    assert.equal(requests.length, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("createImpelCodexModel can still use durable workflow transport", async () => {
   const requests = [];
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
@@ -310,10 +375,6 @@ test("createImpelCodexModel routes Codex through impel-inference", async () => {
       assert.equal(body.provider, "codex-cli");
       assert.equal(body.modelId, "gpt-5.5");
       assert.equal(body.orgId, "org_codex");
-      assert.equal(body.providerOptions.approvalMode, "never");
-      assert.equal(body.providerOptions.sandboxMode, "workspace-write");
-      assert.equal(body.providerOptions.skipGitRepoCheck, true);
-      assert.equal(body.providerOptions.reasoningEffort, "high");
       return new Response(
         JSON.stringify({
           runId: "run_codex",
@@ -365,7 +426,7 @@ test("createImpelCodexModel routes Codex through impel-inference", async () => {
       baseUrl: "https://infer.example",
       apiKey: "secret",
       orgId: "org_codex",
-      providerOptions: { reasoningEffort: "high" },
+      transport: "workflow",
     });
 
     const result = await model.doGenerate({ prompt: [] });

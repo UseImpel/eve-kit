@@ -15,6 +15,7 @@ export const IMPEL_CLAUDE_CONTEXT_WINDOW_TOKENS = 200000;
 export const IMPEL_DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";
 export const IMPEL_CODEX_CONTEXT_WINDOW_TOKENS = 200000;
 export const IMPEL_DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
+export const IMPEL_DEFAULT_OPENAI_RESPONSES_MODEL_ID = IMPEL_DEFAULT_CODEX_MODEL_ID;
 
 export interface ImpelClaudeProviderOptionsInput {
   providerOptions?: ClaudeCodeSettings;
@@ -53,6 +54,9 @@ export interface ImpelCodexModelOptions
   headers?: ImpelInferenceHeaders;
   runContext?: ImpelInferenceRunContextProvider;
 }
+
+export interface ImpelOpenAIResponsesModelOptions
+  extends ImpelCodexModelOptions {}
 
 export function createImpelClaudeProviderOptions({
   providerOptions,
@@ -104,6 +108,21 @@ export function resolveImpelCodexModelId({
   defaultModelId?: string;
 } = {}): string {
   return modelId ?? process.env.IMPEL_CODEX_MODEL_ID ?? defaultModelId;
+}
+
+export function resolveImpelOpenAIResponsesModelId({
+  modelId,
+  defaultModelId = IMPEL_DEFAULT_OPENAI_RESPONSES_MODEL_ID,
+}: {
+  modelId?: string;
+  defaultModelId?: string;
+} = {}): string {
+  return (
+    modelId ??
+    process.env.IMPEL_OPENAI_RESPONSES_MODEL_ID ??
+    process.env.IMPEL_CODEX_MODEL_ID ??
+    defaultModelId
+  );
 }
 
 export function inferClaudeCodeLocalModel(
@@ -251,6 +270,7 @@ export function createImpelCodexModel(
     sandboxMode,
     skipGitRepoCheck,
     effort,
+    transport = "model-stream",
     ...inferenceOptions
   } = options;
   const modelId = resolveImpelCodexModelId({
@@ -260,7 +280,8 @@ export function createImpelCodexModel(
 
   return impelInference(modelId, {
     ...inferenceOptions,
-    provider: "codex-cli",
+    transport,
+    provider: transport === "model-stream" ? "codex-app-server" : "codex-cli",
     providerOptions: createImpelCodexProviderOptions({
       providerOptions,
       approvalMode,
@@ -268,5 +289,21 @@ export function createImpelCodexModel(
       skipGitRepoCheck,
       effort,
     }),
+  });
+}
+
+export function createImpelOpenAIResponsesModel(
+  options: ImpelOpenAIResponsesModelOptions = {},
+): LanguageModelV3 {
+  return createImpelCodexModel({
+    ...options,
+    defaultModelId:
+      options.defaultModelId ?? IMPEL_DEFAULT_OPENAI_RESPONSES_MODEL_ID,
+    modelId: resolveImpelOpenAIResponsesModelId({
+      modelId: options.modelId,
+      defaultModelId:
+        options.defaultModelId ?? IMPEL_DEFAULT_OPENAI_RESPONSES_MODEL_ID,
+    }),
+    transport: options.transport ?? "model-stream",
   });
 }

@@ -273,7 +273,8 @@ function rejectedFinishMessage({ part, runId, label, }) {
         return undefined;
     const claude = providerMetadata(part, "claude-code");
     const codex = providerMetadata(part, "codex-cli");
-    const metadata = claude ?? codex;
+    const codexAppServer = providerMetadata(part, "codex-app-server");
+    const metadata = claude ?? codex ?? codexAppServer;
     const terminalReason = typeof metadata?.terminalReason === "string"
         ? metadata.terminalReason
         : undefined;
@@ -532,6 +533,14 @@ export function impelInference(modelId, opts) {
             extraHeaders: opts?.headers,
         });
         async function createInferenceRun() {
+            if (opts?.transport === "model-stream") {
+                return await openInferenceStream({
+                    url: `${baseUrl}/v1/model/stream`,
+                    headers,
+                    body,
+                    method: "POST",
+                });
+            }
             try {
                 return await startInferenceStream({ baseUrl, headers, body, orgId });
             }

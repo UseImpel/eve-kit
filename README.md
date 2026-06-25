@@ -114,11 +114,21 @@ export default defineAgent({
 });
 ```
 
-The helper defaults to `IMPEL_CODEX_MODEL_ID` or `gpt-5.5`, forwards to
-`impel-inference` with `provider: "codex-cli"`, and applies the autonomous Codex
-defaults `approvalMode: "never"`, `sandboxMode: "workspace-write"`, and
-`skipGitRepoCheck: true`. Override those values only when the host runtime needs
-a stricter mode.
+The helper defaults to `IMPEL_CODEX_MODEL_ID` or `gpt-5.5` and uses the hosted
+`/v1/model/stream` transport by default. That path lets `impel-inference` own
+ChatGPT token bootstrap and refresh through Codex app-server, instead of seeding
+refresh-capable credentials into a sandbox. It sends `provider:
+"codex-app-server"` and applies the autonomous Codex defaults `approvalMode:
+"never"`, `sandboxMode: "workspace-write"`, and `skipGitRepoCheck: true`.
+Override those values only when the host runtime needs a stricter mode.
+
+Set `transport: "workflow"` to use the older durable `/v1/infer` sandbox path:
+
+```ts
+createImpelCodexModel({
+  transport: "workflow",
+});
+```
 
 The provider reads these environment variables by default:
 
