@@ -533,7 +533,7 @@ export function impelInference(modelId, opts) {
             extraHeaders: opts?.headers,
         });
         async function createInferenceRun() {
-            if (opts?.transport === "model-stream") {
+            if (opts?.transport !== "workflow") {
                 return await openInferenceStream({
                     url: `${baseUrl}/v1/model/stream`,
                     headers,

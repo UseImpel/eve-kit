@@ -75,7 +75,48 @@ function finishPart() {
   };
 }
 
-test("streams from /start and forwards auth, trace headers, and Eve clientContext", async () => {
+test("impelInference uses hosted model stream by default", async () => {
+  const requests = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+
+    assert.equal(String(url), "https://infer.example/v1/model/stream");
+    const body = JSON.parse(String(init.body));
+    assert.equal(body.provider, "claude-code");
+    assert.equal(body.modelId, "claude-opus-4-8");
+    assert.equal(body.orgId, "org_default");
+    return new Response(
+      sse([
+        { type: "stream-start", warnings: [] },
+        { type: "text-start", id: "txt" },
+        { type: "text-delta", id: "txt", delta: "hosted" },
+        { type: "text-end", id: "txt" },
+        finishPart(),
+        "[DONE]",
+      ]),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  };
+
+  try {
+    const model = impelInference("claude-opus-4-8", {
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_default",
+    });
+
+    const result = await model.doGenerate({ prompt: [] });
+
+    assert.equal(result.content[0].type, "text");
+    assert.equal(result.content[0].text, "hosted");
+    assert.equal(requests.length, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("workflow transport streams from /start and forwards auth, trace headers, and Eve clientContext", async () => {
   const requests = [];
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
@@ -145,6 +186,7 @@ test("streams from /start and forwards auth, trace headers, and Eve clientContex
       baseUrl: "https://infer.example",
       apiKey: "secret",
       orgId: "org_default",
+      transport: "workflow",
       providerOptions: { permissionMode: "bypassPermissions" },
       headers: () => ({ traceparent: "00-test", authorization: "ignored" }),
     });
@@ -211,6 +253,7 @@ test("filters reasoning stream parts by default", async () => {
       baseUrl: "https://infer.example",
       apiKey: "secret",
       orgId: "org_default",
+      transport: "workflow",
     });
 
     const parts = await readStreamParts(model);
@@ -266,6 +309,7 @@ test("can opt in to forwarding reasoning stream parts", async () => {
       baseUrl: "https://infer.example",
       apiKey: "secret",
       orgId: "org_default",
+      transport: "workflow",
       streamReasoning: true,
     });
 
@@ -681,6 +725,7 @@ test("retries transient provider overload before surfacing API error text", asyn
       baseUrl: "https://infer.example",
       apiKey: "secret",
       orgId: "org_default",
+      transport: "workflow",
     });
 
     const result = await model.doGenerate({
@@ -755,6 +800,7 @@ test("surfaces structured provider errors with preceding provider text", async (
       baseUrl: "https://infer.example",
       apiKey: "secret",
       orgId: "org_auth",
+      transport: "workflow",
     });
 
     await assert.rejects(
@@ -853,6 +899,7 @@ test("resumes detached stream with service cursor and org id", async () => {
       baseUrl: "https://infer.example",
       apiKey: "secret",
       orgId: "org_default",
+      transport: "workflow",
     });
 
     const result = await model.doGenerate({
@@ -950,6 +997,7 @@ test("recovers malformed stream frames by resuming the same inference run", asyn
       baseUrl: "https://infer.example",
       apiKey: "secret",
       orgId: "org_default",
+      transport: "workflow",
     });
 
     const result = await model.doGenerate({

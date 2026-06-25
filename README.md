@@ -10,7 +10,7 @@ the normal Eve filesystem layout: `agent.ts`, `channels/`, `sandbox/`,
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.15.tar.gz
+npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.16.tar.gz
 ```
 
 ## Eve Usage
@@ -94,6 +94,9 @@ const model = impelInference("claude-opus-4-8", {
 });
 ```
 
+`impelInference()` uses the hosted `/v1/model/stream` transport by default. Pass
+`transport: "workflow"` only for the older resumable `/v1/infer` sandbox path.
+
 By default, `impelInference()` does not forward AI SDK reasoning stream parts to
 the caller. The full raw reasoning stream is still recorded in
 `impel-inference` provider traces, while the model stream remains stable across
@@ -166,7 +169,7 @@ This package does not contain credentials and does not grant access to
 `impel-inference`. Every inference request requires a bearer token via `apiKey`
 or `IMPEL_INFERENCE_API_KEY`; calls fail locally before `fetch` when the key is
 missing. The service also enforces the bearer token on `/v1/infer`,
-`/v1/infer/start`, and `/v1/infer/runs/:runId/stream`.
+`/v1/infer/start`, `/v1/infer/runs/:runId/stream`, and `/v1/model/stream`.
 Stream resumes include the resolved `orgId` as both `x-impel-org-id` and an
 `orgId` query parameter so the service can verify the run belongs to that org
 before tailing it.
