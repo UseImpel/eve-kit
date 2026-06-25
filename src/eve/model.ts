@@ -114,6 +114,31 @@ export function inferClaudeCodeLocalModel(
   return fallback;
 }
 
+/**
+ * Is this a deployed Vercel serverless runtime (as opposed to local dev)?
+ *
+ * We key off `VERCEL_ENV` rather than `VERCEL` on purpose. Vercel sets
+ * `VERCEL_ENV` to exactly "production" | "preview" | "development":
+ *   - "production" / "preview" -> a real, remote deployment. There is NO Claude
+ *     Code CLI and NO Anthropic OAuth credential here, so the local `claudeCode`
+ *     provider can never work — it only throws a cryptic `AI_LoadAPIKeyError`
+ *     deep in the tool loop.
+ *   - "development" -> `vercel dev` running on a developer's machine, where the
+ *     Claude Code CLI IS available, so `claudeCode` is valid.
+ *
+ * `VERCEL` (==="1") is deliberately NOT used as the signal: it is also set by
+ * `vercel dev` and during local builds, where claudeCode is valid. Treating
+ * `VERCEL=1` as "deployed" would break local development — the exact thing we
+ * must not do. Keying off production/preview only is the conservative choice:
+ * the loud failure can only fire on a real remote deploy, never locally.
+ */
+function isDeployedServerlessRuntime(): boolean {
+  return (
+    process.env.VERCEL_ENV === "production" ||
+    process.env.VERCEL_ENV === "preview"
+  );
+}
+
 export function createImpelClaudeModel(
   options: ImpelClaudeModelOptions = {},
 ): LanguageModelV3 {
@@ -152,6 +177,34 @@ export function createImpelClaudeModel(
         unknown
       >,
     });
+  }
+
+  // The durable impel-inference proxy was not selected (no baseUrl and no
+  // IMPEL_INFERENCE_URL). The only remaining path is the local `claudeCode`
+  // provider, which depends on the Claude Code CLI + Anthropic OAuth credentials
+  // that exist ONLY in local development. In a deployed serverless runtime those
+  // are absent, so claudeCode throws a late, cryptic `AI_LoadAPIKeyError` deep in
+  // the tool loop (it surfaces as MODEL_CALL_FAILED / a chat stuck at "Starting
+  // runtime") — a missing-env misconfiguration that is painful to diagnose.
+  //
+  // Fail loud and early instead, but ONLY when we are certain we are in a
+  // deployed runtime (see isDeployedServerlessRuntime: production/preview only).
+  // Local dev — plain `node`/`tsx`/`eve dev` (no VERCEL_ENV) and `vercel dev`
+  // (VERCEL_ENV="development") — still falls through to claudeCode exactly as
+  // before. `IMPEL_ALLOW_CLAUDE_CODE_FALLBACK=1` is an explicit escape hatch to
+  // force the local provider even on a deploy.
+  if (
+    isDeployedServerlessRuntime() &&
+    process.env.IMPEL_ALLOW_CLAUDE_CODE_FALLBACK !== "1"
+  ) {
+    throw new Error(
+      "IMPEL_INFERENCE_URL is not set — this deployed agent cannot reach " +
+        "impel-inference, and the local claude-code provider only works in local " +
+        "development (it requires the Claude Code CLI and Anthropic OAuth " +
+        "credentials, which do not exist in a Vercel serverless runtime). Set " +
+        "IMPEL_INFERENCE_URL (and IMPEL_INFERENCE_API_KEY) on this deployment, or " +
+        "set IMPEL_ALLOW_CLAUDE_CODE_FALLBACK=1 to force the local provider.",
+    );
   }
 
   return claudeCode(
