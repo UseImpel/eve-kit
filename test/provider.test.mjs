@@ -474,7 +474,7 @@ test("createImpelClaudeModel requires impel-inference in production", () => {
   }
 });
 
-test("createImpelClaudeModel can opt into hosted model-stream transport via env", async () => {
+test("createImpelClaudeModel uses hosted model-stream transport by default", async () => {
   const requests = [];
   const previousFetch = globalThis.fetch;
   const previousUrl = process.env.IMPEL_INFERENCE_URL;
@@ -485,7 +485,7 @@ test("createImpelClaudeModel can opt into hosted model-stream transport via env"
   process.env.IMPEL_INFERENCE_URL = "https://inference.test";
   process.env.IMPEL_INFERENCE_API_KEY = "secret";
   process.env.IMPEL_ORG_ID = "org_env";
-  process.env.IMPEL_CLAUDE_TRANSPORT = "model-stream";
+  delete process.env.IMPEL_CLAUDE_TRANSPORT;
   globalThis.fetch = async (url, init = {}) => {
     requests.push({ url: String(url), init });
     assert.equal(String(url), "https://inference.test/v1/model/stream");
@@ -538,6 +538,66 @@ test("createImpelClaudeModel can opt into hosted model-stream transport via env"
     } else {
       process.env.IMPEL_CLAUDE_TRANSPORT = previousTransport;
     }
+  }
+});
+
+test("createImpelClaudeModel can explicitly use durable workflow transport", async () => {
+  const requests = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+
+    if (String(url).endsWith("/v1/infer/start")) {
+      const body = JSON.parse(String(init.body));
+      assert.equal(body.provider, "claude-code");
+      assert.equal(body.modelId, "claude-sonnet-4-5");
+      assert.equal(body.orgId, "org_workflow");
+      return new Response(
+        JSON.stringify({
+          runId: "run_claude_workflow",
+          streamUrl:
+            "/v1/infer/runs/run_claude_workflow/stream?startIndex=0&orgId=org_workflow",
+        }),
+        { status: 202, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    if (
+      String(url).endsWith(
+        "/v1/infer/runs/run_claude_workflow/stream?startIndex=0&orgId=org_workflow",
+      )
+    ) {
+      return new Response(
+        sse([
+          { type: "stream-start", warnings: [] },
+          { type: "text-start", id: "txt" },
+          { type: "text-delta", id: "txt", delta: "workflow" },
+          { type: "text-end", id: "txt" },
+          finishPart(),
+          "[DONE]",
+        ]),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    }
+
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  try {
+    const model = createImpelClaudeModel({
+      baseUrl: "https://inference.test",
+      apiKey: "secret",
+      orgId: "org_workflow",
+      modelId: "claude-sonnet-4-5",
+      transport: "workflow",
+    });
+    const result = await model.doGenerate({ prompt: [] });
+
+    assert.equal(result.content[0].type, "text");
+    assert.equal(result.content[0].text, "workflow");
+    assert.equal(requests.length, 2);
+  } finally {
+    globalThis.fetch = previousFetch;
   }
 });
 

@@ -176,10 +176,12 @@ function allowLocalProviderFallback(explicit?: boolean): boolean {
 
 function resolveClaudeTransport(
   explicit: ImpelInferenceOptions["transport"] | undefined,
-): ImpelInferenceOptions["transport"] | undefined {
+): ImpelInferenceOptions["transport"] {
   if (explicit) return explicit;
   const value = process.env.IMPEL_CLAUDE_TRANSPORT?.trim();
-  return value === "model-stream" || value === "workflow" ? value : undefined;
+  return value === "model-stream" || value === "workflow"
+    ? value
+    : "model-stream";
 }
 
 export function createImpelClaudeModel(
@@ -216,7 +218,7 @@ export function createImpelClaudeModel(
   if (inferenceOptions.baseUrl ?? process.env.IMPEL_INFERENCE_URL) {
     return impelInference(modelId, {
       ...inferenceOptions,
-      ...(transport ? { transport } : {}),
+      transport,
       provider,
       providerOptions: resolvedProviderOptions as unknown as Record<
         string,
