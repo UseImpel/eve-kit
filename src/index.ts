@@ -1,3 +1,4 @@
+import { JSONParseError } from "@ai-sdk/provider";
 import {
   parseJsonEventStream,
   type ParseResult,
@@ -36,6 +37,13 @@ export interface ImpelInferenceOptions {
   apiKey?: string;
   orgId?: string;
   /**
+   * Forward reasoning stream parts to the AI SDK caller. Defaults to false
+   * because long provider-managed agent loops can occasionally emit reasoning
+   * block lifecycles that current AI SDK beta stream accumulators reject. Raw
+   * reasoning remains available in impel-inference provider traces.
+   */
+  streamReasoning?: boolean;
+  /**
    * Provider construction options for the provider reconstructed inside
    * impel-inference, for example claudeCode permissionMode, maxTurns, agents,
    * and effort.
@@ -43,8 +51,8 @@ export interface ImpelInferenceOptions {
   providerOptions?: Record<string, unknown>;
   /**
    * Additional request headers, evaluated per model call. Useful for W3C trace
-   * headers. authorization, content-type, and x-org-id are always controlled by
-   * this package and cannot be overridden here.
+   * headers. authorization, content-type, x-org-id, and x-impel-org-id are
+   * always controlled by this package and cannot be overridden here.
    */
   headers?: ImpelInferenceHeaders;
   /**
@@ -73,6 +81,7 @@ type ParsedStreamPart = z.infer<typeof streamPartSchema>;
 interface InferenceStream {
   stream: ReadableStream<ParseResult<ParsedStreamPart>>;
   runId?: string;
+  nextStartIndex?: number;
 }
 
 class StartEndpointUnavailableError extends Error {}
@@ -110,14 +119,34 @@ function redactSecrets(
   if (typeof value === "string") return redactString(value);
   if (value === null || typeof value !== "object") return value;
 
+  if (seen.has(value)) return "[circular]";
+  seen.add(value);
+
   if (value instanceof Error) {
-    const error = new Error(redactString(value.message));
+    const cause =
+      "cause" in value
+        ? redactSecrets(
+            (value as Error & { cause?: unknown }).cause,
+            seen,
+          )
+        : undefined;
+    const error =
+      cause === undefined
+        ? new Error(redactString(value.message))
+        : new Error(redactString(value.message), { cause });
     error.name = value.name;
+    if (typeof value.stack === "string") {
+      error.stack = redactString(value.stack);
+    }
+    for (const key of Object.getOwnPropertyNames(value)) {
+      if (["message", "name", "stack", "cause"].includes(key)) continue;
+      (error as unknown as Record<string, unknown>)[key] = redactSecrets(
+        (value as unknown as Record<string, unknown>)[key],
+        seen,
+      );
+    }
     return error;
   }
-
-  if (seen.has(value)) return value;
-  seen.add(value);
 
   if (Array.isArray(value)) {
     return value.map((item) => redactSecrets(item, seen));
@@ -135,8 +164,129 @@ function redactStreamPart(part: ParsedStreamPart): LanguageModelV3StreamPart {
   return redactSecrets(part) as LanguageModelV3StreamPart;
 }
 
-function redactedError(error: unknown): unknown {
-  return redactSecrets(error);
+function isReasoningStreamPart(part: LanguageModelV3StreamPart): boolean {
+  return (
+    part.type === "reasoning-start" ||
+    part.type === "reasoning-delta" ||
+    part.type === "reasoning-end"
+  );
+}
+
+function safeJsonStringify(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function stringField(
+  value: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const field = value[key];
+  return typeof field === "string" && field.trim() !== ""
+    ? field
+    : undefined;
+}
+
+function errorMessageFromValue(value: unknown, fallback: string): string {
+  if (value instanceof Error) {
+    const name = value.name && value.name !== "Error" ? value.name : undefined;
+    if (value.message && name && !value.message.includes(name)) {
+      return `${name}: ${value.message}`;
+    }
+    return value.message || name || fallback;
+  }
+
+  if (typeof value === "string") return value || fallback;
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const name = stringField(record, "name");
+    const message = stringField(record, "message");
+    if (message && name && !message.includes(name)) {
+      return `${name}: ${message}`;
+    }
+    if (message) return message;
+
+    const nested = record.error;
+    if (nested && typeof nested === "object") {
+      const nestedMessage = errorMessageFromValue(nested, "");
+      if (nestedMessage) return nestedMessage;
+    } else if (typeof nested === "string" && nested.trim() !== "") {
+      return nested;
+    }
+
+    const responseBody = record.responseBody ?? record.body ?? record.data;
+    const responseText =
+      typeof responseBody === "string"
+        ? responseBody
+        : responseBody == null
+          ? undefined
+          : safeJsonStringify(responseBody);
+    if (responseText && responseText !== "{}") {
+      return name ? `${name}: ${responseText}` : responseText;
+    }
+
+    const keys = Object.keys(record).filter(
+      (key) => record[key] !== undefined,
+    );
+    if (name && keys.length === 1) return name;
+
+    const json = safeJsonStringify(value);
+    if (json && json !== "{}") return json;
+    if (name) return name;
+  }
+
+  const asString = String(value);
+  return asString && asString !== "[object Object]" ? asString : fallback;
+}
+
+function textContent(content: LanguageModelV3Content[]): string {
+  return content
+    .map((part) =>
+      part.type === "text" || part.type === "reasoning" ? part.text : "",
+    )
+    .join("")
+    .trim();
+}
+
+function errorFromUnknown(
+  error: unknown,
+  fallback: string,
+  context?: { partialOutput?: string },
+): Error {
+  const redacted = redactSecrets(error);
+  let message = errorMessageFromValue(redacted, fallback);
+  const partialOutput = context?.partialOutput?.trim();
+  if (partialOutput) {
+    const redactedPartial = redactString(partialOutput).slice(0, 1000);
+    if (redactedPartial && !message.includes(redactedPartial)) {
+      message += `; partial provider output: ${redactedPartial}`;
+    }
+  }
+
+  const cause =
+    redacted instanceof Error &&
+    "cause" in redacted &&
+    (redacted as Error & { cause?: unknown }).cause !== undefined
+      ? (redacted as Error & { cause?: unknown }).cause
+      : redacted;
+  const normalized = new Error(redactString(message).slice(0, 2000), {
+    cause,
+  });
+  if (redacted instanceof Error) {
+    normalized.name = redacted.name;
+  } else if (redacted && typeof redacted === "object") {
+    const name = stringField(redacted as Record<string, unknown>, "name");
+    if (name) normalized.name = name;
+  }
+  return normalized;
+}
+
+function redactedError(error: unknown): Error {
+  return errorFromUnknown(error, "impel-inference provider error");
 }
 
 function headersInitToRecord(headers: HeadersInit | undefined): Record<string, string> {
@@ -165,8 +315,16 @@ async function inferenceHeaders({
     ...(await resolveExtraHeaders(extraHeaders)),
     authorization: `Bearer ${apiKey}`,
     "x-org-id": orgId,
+    "x-impel-org-id": orgId,
     "content-type": "application/json",
   };
+}
+
+function parseStreamTailIndex(response: Response): number | undefined {
+  const value = response.headers.get("x-workflow-stream-tail-index");
+  if (value == null || value.trim() === "") return undefined;
+  const n = Number.parseInt(value, 10);
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
 }
 
 async function inferenceResponseError(response: Response): Promise<Error> {
@@ -205,12 +363,14 @@ async function openInferenceStream({
     throw new Error("impel-inference response had no stream body");
   }
 
+  const tailIndex = parseStreamTailIndex(response);
   return {
     stream: parseJsonEventStream({
       stream: response.body,
       schema: streamPartSchema,
     }),
     runId: response.headers.get("x-workflow-run-id") ?? undefined,
+    nextStartIndex: tailIndex == null ? undefined : tailIndex + 1,
   };
 }
 
@@ -218,10 +378,12 @@ async function startInferenceStream({
   baseUrl,
   headers,
   body,
+  orgId,
 }: {
   baseUrl: string;
   headers: Record<string, string>;
   body: unknown;
+  orgId: string;
 }): Promise<InferenceStream> {
   const response = await fetch(`${baseUrl}/v1/infer/start`, {
     method: "POST",
@@ -256,8 +418,15 @@ async function startInferenceStream({
   if (!streamUrl.searchParams.has("startIndex")) {
     streamUrl.searchParams.set("startIndex", "0");
   }
+  if (!streamUrl.searchParams.has("orgId")) {
+    streamUrl.searchParams.set("orgId", orgId);
+  }
   const stream = await openInferenceStream({ url: streamUrl.toString(), headers });
-  return { stream: stream.stream, runId: stream.runId ?? runId };
+  return {
+    stream: stream.stream,
+    runId: stream.runId ?? runId,
+    nextStartIndex: stream.nextStartIndex,
+  };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -368,6 +537,12 @@ function isTransientProviderError({
     /rate.?limit/i.test(text) ||
     /\b(?:econnreset|etimedout|timeout)\b/i.test(text)
   );
+}
+
+function isJsonParseStreamError(error: unknown): boolean {
+  if (JSONParseError.isInstance(error)) return true;
+  const text = stringifyErrorLike(error);
+  return /AI_JSONParseError|JSON parsing failed/i.test(text);
 }
 
 function isUserVisibleStreamPart(part: LanguageModelV3StreamPart): boolean {
@@ -542,6 +717,7 @@ export function impelInference(
 ): LanguageModelV3 {
   const constructorProviderOptions = opts?.providerOptions ?? {};
   const label = opts?.label ?? "impel-inference";
+  const streamReasoning = opts?.streamReasoning === true;
 
   async function doStream(options: LanguageModelV3CallOptions) {
     const baseUrl = requireConfigured(
@@ -620,7 +796,7 @@ export function impelInference(
 
     async function createInferenceRun(): Promise<InferenceStream> {
       try {
-        return await startInferenceStream({ baseUrl, headers, body });
+        return await startInferenceStream({ baseUrl, headers, body, orgId });
       } catch (error) {
         if (!(error instanceof StartEndpointUnavailableError)) throw error;
         return await openInferenceStream({
@@ -647,6 +823,10 @@ export function impelInference(
       20,
     );
     const resumeDelayMs = envNumber("IMPEL_INFERENCE_RESUME_DELAY_MS", 1000);
+    const maxParseResumeAttempts = envNumber(
+      "IMPEL_INFERENCE_PARSE_RESUME_MAX_ATTEMPTS",
+      3,
+    );
     const maxTransientAttempts = envNumber(
       "IMPEL_INFERENCE_TRANSIENT_MAX_ATTEMPTS",
       2,
@@ -667,8 +847,11 @@ export function impelInference(
 
         void (async () => {
           let current = initial;
+          let resumeStartIndex = initial.nextStartIndex ?? 0;
           let skipAlreadySeen = 0;
           let resumeAttempts = 0;
+          let parseResumeAttempts = 0;
+          let lastParseResumeStartIndex: number | undefined;
           let transientAttempts = 0;
           let heldTextParts: LanguageModelV3StreamPart[] = [];
           let heldText = "";
@@ -699,6 +882,8 @@ export function impelInference(
               let streamClosed = false;
               let partsSeenThisConnection = 0;
               let retryTransient = false;
+              let retryResume = false;
+              const hasServiceCursor = current.nextStartIndex !== undefined;
 
               try {
                 for (;;) {
@@ -712,6 +897,18 @@ export function impelInference(
                   upstreamPartCount += 1;
 
                   if (!chunk.success) {
+                    if (
+                      isJsonParseStreamError(chunk.error) &&
+                      inferenceRunId &&
+                      hasServiceCursor &&
+                      parseResumeAttempts < maxParseResumeAttempts &&
+                      lastParseResumeStartIndex !== resumeStartIndex &&
+                      resumeAttempts < maxResumeAttempts
+                    ) {
+                      retryResume = true;
+                      break;
+                    }
+
                     const transient = isTransientProviderError({
                       error: chunk.error,
                       heldText,
@@ -724,17 +921,26 @@ export function impelInference(
                       retryTransient = true;
                       break;
                     }
+                    const partialOutput = heldText;
                     flushHeldTextParts();
                     sawProviderError = true;
                     enqueuePart({
                       type: "error",
-                      error: redactedError(chunk.error),
+                      error: errorFromUnknown(
+                        chunk.error,
+                        "impel-inference stream parse error",
+                        { partialOutput },
+                      ),
                     });
                     continue;
                   }
 
                   sawUpstreamPart = true;
                   const part = redactStreamPart(chunk.value);
+                  if (!streamReasoning && isReasoningStreamPart(part)) {
+                    continue;
+                  }
+
                   if (part.type === "stream-start") {
                     if (sawStreamStart) continue;
                     sawStreamStart = true;
@@ -793,9 +999,17 @@ export function impelInference(
                       retryTransient = true;
                       break;
                     }
+                    const partialOutput = heldText;
                     flushHeldTextParts();
                     sawProviderError = true;
-                    enqueuePart(part);
+                    enqueuePart({
+                      ...part,
+                      error: errorFromUnknown(
+                        part.error,
+                        "impel-inference provider error",
+                        { partialOutput },
+                      ),
+                    });
                     continue;
                   }
 
@@ -815,10 +1029,33 @@ export function impelInference(
                 upstreamPartCount = 0;
                 skipAlreadySeen = 0;
                 resumeAttempts = 0;
+                parseResumeAttempts = 0;
+                lastParseResumeStartIndex = undefined;
                 await sleep(transientDelayMs * transientAttempts);
                 const restarted = await createInferenceRun();
                 inferenceRunId = restarted.runId;
                 current = restarted;
+                continue;
+              }
+
+              if (retryResume && inferenceRunId) {
+                const runId = inferenceRunId;
+                resumeAttempts += 1;
+                parseResumeAttempts += 1;
+                await sleep(resumeDelayMs * Math.min(resumeAttempts, 5));
+                const startIndex = resumeStartIndex;
+                lastParseResumeStartIndex = startIndex;
+                skipAlreadySeen = startIndex === 0 ? upstreamPartCount : 0;
+                const resumed = await openInferenceStream({
+                  url:
+                    `${baseUrl}/v1/infer/runs/` +
+                    `${encodeURIComponent(runId)}/stream?startIndex=${startIndex}` +
+                    `&orgId=${encodeURIComponent(orgId)}`,
+                  headers,
+                });
+                inferenceRunId = resumed.runId ?? runId;
+                resumeStartIndex = resumed.nextStartIndex ?? startIndex;
+                current = resumed;
                 continue;
               }
 
@@ -843,14 +1080,17 @@ export function impelInference(
               ) {
                 resumeAttempts += 1;
                 await sleep(resumeDelayMs);
-                skipAlreadySeen = upstreamPartCount;
+                const startIndex = resumeStartIndex;
+                skipAlreadySeen = startIndex === 0 ? upstreamPartCount : 0;
                 const resumed = await openInferenceStream({
                   url:
                     `${baseUrl}/v1/infer/runs/` +
-                    `${encodeURIComponent(inferenceRunId)}/stream?startIndex=0`,
+                    `${encodeURIComponent(inferenceRunId)}/stream?startIndex=${startIndex}` +
+                    `&orgId=${encodeURIComponent(orgId)}`,
                   headers,
                 });
                 inferenceRunId = resumed.runId ?? inferenceRunId;
+                resumeStartIndex = resumed.nextStartIndex ?? startIndex;
                 current = resumed;
                 continue;
               }
@@ -944,9 +1184,11 @@ export function impelInference(
             usage = part.usage;
             break;
           case "error":
-            throw part.error instanceof Error
-              ? part.error
-              : new Error(String(part.error));
+            throw errorFromUnknown(
+              part.error,
+              "impel-inference provider error",
+              { partialOutput: textContent(content) },
+            );
           default:
             break;
         }

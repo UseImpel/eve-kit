@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { impelInference } from "../dist/index.js";
-import { createImpelCodexModel } from "../dist/eve/model.js";
+import {
+  createImpelClaudeModel,
+  createImpelCodexModel,
+} from "../dist/eve/model.js";
 
 function sse(parts) {
   return new ReadableStream({
@@ -14,6 +17,15 @@ function sse(parts) {
           ),
         );
       }
+      controller.close();
+    },
+  });
+}
+
+function rawSse(text) {
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
       controller.close();
     },
   });
@@ -33,6 +45,36 @@ function promptWithClientContext(context) {
   ];
 }
 
+async function readStreamParts(model) {
+  const { stream } = await model.doStream({ prompt: [] });
+  const reader = stream.getReader();
+  const parts = [];
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return parts;
+}
+
+function finishPart() {
+  return {
+    type: "finish",
+    finishReason: { unified: "stop", raw: "completed" },
+    usage: {
+      inputTokens: {},
+      outputTokens: {},
+    },
+    providerMetadata: {
+      "claude-code": { terminalReason: "completed" },
+    },
+  };
+}
+
 test("streams from /start and forwards auth, trace headers, and Eve clientContext", async () => {
   const requests = [];
   const previousFetch = globalThis.fetch;
@@ -44,6 +86,7 @@ test("streams from /start and forwards auth, trace headers, and Eve clientContex
       assert.equal(init.headers.authorization, "Bearer secret");
       assert.equal(init.headers.traceparent, "00-test");
       assert.equal(init.headers["x-org-id"], "org_prompt");
+      assert.equal(init.headers["x-impel-org-id"], "org_prompt");
       assert.equal(init.headers["content-type"], "application/json");
       assert.equal(body.orgId, "org_prompt");
       assert.deepEqual(body.repos, ["UseImpel/next"]);
@@ -54,13 +97,17 @@ test("streams from /start and forwards auth, trace headers, and Eve clientContex
       return new Response(
         JSON.stringify({
           runId: "run_1",
-          streamUrl: "/v1/infer/runs/run_1/stream?startIndex=0",
+          streamUrl: "/v1/infer/runs/run_1/stream?startIndex=0&orgId=org_prompt",
         }),
         { status: 202, headers: { "content-type": "application/json" } },
       );
     }
 
-    if (String(url).endsWith("/v1/infer/runs/run_1/stream?startIndex=0")) {
+    if (
+      String(url).endsWith(
+        "/v1/infer/runs/run_1/stream?startIndex=0&orgId=org_prompt",
+      )
+    ) {
       return new Response(
         sse([
           { type: "stream-start", warnings: [] },
@@ -121,6 +168,126 @@ test("streams from /start and forwards auth, trace headers, and Eve clientContex
   }
 });
 
+test("filters reasoning stream parts by default", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/v1/infer/start")) {
+      return new Response(
+        JSON.stringify({
+          runId: "run_reasoning",
+          streamUrl:
+            "/v1/infer/runs/run_reasoning/stream?startIndex=0&orgId=org_default",
+        }),
+        { status: 202, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    if (
+      String(url).endsWith(
+        "/v1/infer/runs/run_reasoning/stream?startIndex=0&orgId=org_default",
+      )
+    ) {
+      return new Response(
+        sse([
+          { type: "stream-start", warnings: [] },
+          { type: "reasoning-start", id: "rsn" },
+          { type: "reasoning-delta", id: "rsn", delta: "thinking" },
+          { type: "reasoning-end", id: "rsn" },
+          { type: "text-start", id: "txt" },
+          { type: "text-delta", id: "txt", delta: "ready" },
+          { type: "text-end", id: "txt" },
+          finishPart(),
+          "[DONE]",
+        ]),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    }
+
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  try {
+    const model = impelInference("claude-opus-4-8", {
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_default",
+    });
+
+    const parts = await readStreamParts(model);
+    assert.deepEqual(
+      parts.map((part) => part.type),
+      ["stream-start", "text-start", "text-delta", "text-end", "finish"],
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("can opt in to forwarding reasoning stream parts", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/v1/infer/start")) {
+      return new Response(
+        JSON.stringify({
+          runId: "run_reasoning_opt_in",
+          streamUrl:
+            "/v1/infer/runs/run_reasoning_opt_in/stream?startIndex=0&orgId=org_default",
+        }),
+        { status: 202, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    if (
+      String(url).endsWith(
+        "/v1/infer/runs/run_reasoning_opt_in/stream?startIndex=0&orgId=org_default",
+      )
+    ) {
+      return new Response(
+        sse([
+          { type: "stream-start", warnings: [] },
+          { type: "reasoning-start", id: "rsn" },
+          { type: "reasoning-delta", id: "rsn", delta: "thinking" },
+          { type: "reasoning-end", id: "rsn" },
+          { type: "text-start", id: "txt" },
+          { type: "text-delta", id: "txt", delta: "ready" },
+          { type: "text-end", id: "txt" },
+          finishPart(),
+          "[DONE]",
+        ]),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    }
+
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  try {
+    const model = impelInference("claude-opus-4-8", {
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_default",
+      streamReasoning: true,
+    });
+
+    const parts = await readStreamParts(model);
+    assert.deepEqual(
+      parts.map((part) => part.type),
+      [
+        "stream-start",
+        "reasoning-start",
+        "reasoning-delta",
+        "reasoning-end",
+        "text-start",
+        "text-delta",
+        "text-end",
+        "finish",
+      ],
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("fails locally when no inference api key is configured", async () => {
   const model = impelInference("claude-opus-4-8", {
     baseUrl: "https://infer.example",
@@ -150,13 +317,17 @@ test("createImpelCodexModel routes Codex through impel-inference", async () => {
       return new Response(
         JSON.stringify({
           runId: "run_codex",
-          streamUrl: "/v1/infer/runs/run_codex/stream?startIndex=0",
+          streamUrl: "/v1/infer/runs/run_codex/stream?startIndex=0&orgId=org_codex",
         }),
         { status: 202, headers: { "content-type": "application/json" } },
       );
     }
 
-    if (String(url).endsWith("/v1/infer/runs/run_codex/stream?startIndex=0")) {
+    if (
+      String(url).endsWith(
+        "/v1/infer/runs/run_codex/stream?startIndex=0&orgId=org_codex",
+      )
+    ) {
       return new Response(
         sse([
           { type: "stream-start", warnings: [] },
@@ -207,6 +378,41 @@ test("createImpelCodexModel routes Codex through impel-inference", async () => {
   }
 });
 
+test("createImpelClaudeModel requires impel-inference in production", () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousUrl = process.env.IMPEL_INFERENCE_URL;
+  const previousAllow = process.env.IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK;
+  process.env.NODE_ENV = "production";
+  delete process.env.IMPEL_INFERENCE_URL;
+  delete process.env.IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK;
+
+  try {
+    assert.throws(
+      () => createImpelClaudeModel(),
+      /IMPEL_INFERENCE_URL or baseUrl is required/,
+    );
+    assert.doesNotThrow(() =>
+      createImpelClaudeModel({ allowLocalProviderFallback: true }),
+    );
+  } finally {
+    if (previousNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+    if (previousUrl === undefined) {
+      delete process.env.IMPEL_INFERENCE_URL;
+    } else {
+      process.env.IMPEL_INFERENCE_URL = previousUrl;
+    }
+    if (previousAllow === undefined) {
+      delete process.env.IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK;
+    } else {
+      process.env.IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK = previousAllow;
+    }
+  }
+});
+
 test("retries transient provider overload before surfacing API error text", async () => {
   const requests = [];
   const previousFetch = globalThis.fetch;
@@ -223,13 +429,17 @@ test("retries transient provider overload before surfacing API error text", asyn
       return new Response(
         JSON.stringify({
           runId: `run_${startCount}`,
-          streamUrl: `/v1/infer/runs/run_${startCount}/stream?startIndex=0`,
+          streamUrl: `/v1/infer/runs/run_${startCount}/stream?startIndex=0&orgId=org_default`,
         }),
         { status: 202, headers: { "content-type": "application/json" } },
       );
     }
 
-    if (String(url).endsWith("/v1/infer/runs/run_1/stream?startIndex=0")) {
+    if (
+      String(url).endsWith(
+        "/v1/infer/runs/run_1/stream?startIndex=0&orgId=org_default",
+      )
+    ) {
       return new Response(
         sse([
           { type: "stream-start", warnings: [] },
@@ -247,7 +457,11 @@ test("retries transient provider overload before surfacing API error text", asyn
       );
     }
 
-    if (String(url).endsWith("/v1/infer/runs/run_2/stream?startIndex=0")) {
+    if (
+      String(url).endsWith(
+        "/v1/infer/runs/run_2/stream?startIndex=0&orgId=org_default",
+      )
+    ) {
       return new Response(
         sse([
           { type: "stream-start", warnings: [] },
@@ -298,6 +512,282 @@ test("retries transient provider overload before surfacing API error text", asyn
       delete process.env.IMPEL_INFERENCE_TRANSIENT_RETRY_DELAY_MS;
     } else {
       process.env.IMPEL_INFERENCE_TRANSIENT_RETRY_DELAY_MS = previousRetryDelay;
+    }
+  }
+});
+
+test("surfaces structured provider errors with preceding provider text", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).endsWith("/v1/infer/start")) {
+      return new Response(
+        JSON.stringify({
+          runId: "run_auth",
+          streamUrl:
+            "/v1/infer/runs/run_auth/stream?startIndex=0&orgId=org_auth",
+        }),
+        { status: 202, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    if (
+      String(url).endsWith(
+        "/v1/infer/runs/run_auth/stream?startIndex=0&orgId=org_auth",
+      )
+    ) {
+      return new Response(
+        sse([
+          { type: "stream-start", warnings: [] },
+          { type: "response-metadata", id: "resp_auth" },
+          { type: "text-start", id: "txt_auth" },
+          {
+            type: "text-delta",
+            id: "txt_auth",
+            delta:
+              "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+          },
+          { type: "error", error: { name: "AI_LoadAPIKeyError" } },
+          "[DONE]",
+        ]),
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream",
+            "x-workflow-run-id": "run_auth",
+          },
+        },
+      );
+    }
+
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  try {
+    const model = impelInference("claude-sonnet-4-5", {
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_auth",
+    });
+
+    await assert.rejects(
+      () =>
+        model.doGenerate({
+          prompt: [{ role: "user", content: [{ type: "text", text: "report" }] }],
+        }),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.notEqual(error.message, "[object Object]");
+        assert.match(error.message, /AI_LoadAPIKeyError/);
+        assert.match(error.message, /401 Invalid authentication credentials/);
+        assert.deepEqual(error.cause, { name: "AI_LoadAPIKeyError" });
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("resumes detached stream with service cursor and org id", async () => {
+  const requests = [];
+  const previousFetch = globalThis.fetch;
+  const previousResumeDelay = process.env.IMPEL_INFERENCE_RESUME_DELAY_MS;
+  process.env.IMPEL_INFERENCE_RESUME_DELAY_MS = "0";
+
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+
+    if (String(url).endsWith("/v1/infer/start")) {
+      return new Response(
+        JSON.stringify({
+          runId: "run_cursor",
+          streamUrl:
+            "/v1/infer/runs/run_cursor/stream?startIndex=0&orgId=org_default",
+        }),
+        { status: 202, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    if (
+      String(url).endsWith(
+        "/v1/infer/runs/run_cursor/stream?startIndex=0&orgId=org_default",
+      )
+    ) {
+      return new Response(sse([{ type: "stream-start", warnings: [] }]), {
+        status: 200,
+        headers: {
+          "content-type": "text/event-stream",
+          "x-workflow-run-id": "run_cursor",
+          "x-workflow-stream-tail-index": "4",
+        },
+      });
+    }
+
+    if (
+      String(url).endsWith(
+        "/v1/infer/runs/run_cursor/stream?startIndex=5&orgId=org_default",
+      )
+    ) {
+      return new Response(
+        sse([
+          { type: "stream-start", warnings: [] },
+          { type: "text-start", id: "txt" },
+          { type: "text-delta", id: "txt", delta: "resumed" },
+          { type: "text-end", id: "txt" },
+          {
+            type: "finish",
+            finishReason: { unified: "stop", raw: "completed" },
+            usage: {
+              inputTokens: {},
+              outputTokens: {},
+            },
+            providerMetadata: {
+              "claude-code": { terminalReason: "completed" },
+            },
+          },
+          "[DONE]",
+        ]),
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream",
+            "x-workflow-run-id": "run_cursor",
+          },
+        },
+      );
+    }
+
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  try {
+    const model = impelInference("claude-opus-4-8", {
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_default",
+    });
+
+    const result = await model.doGenerate({
+      prompt: [{ role: "user", content: [{ type: "text", text: "ready?" }] }],
+    });
+
+    assert.equal(result.content[0].type, "text");
+    assert.equal(result.content[0].text, "resumed");
+    assert.ok(
+      requests.some((request) =>
+        request.url.endsWith(
+          "/v1/infer/runs/run_cursor/stream?startIndex=5&orgId=org_default",
+        ),
+      ),
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousResumeDelay === undefined) {
+      delete process.env.IMPEL_INFERENCE_RESUME_DELAY_MS;
+    } else {
+      process.env.IMPEL_INFERENCE_RESUME_DELAY_MS = previousResumeDelay;
+    }
+  }
+});
+
+test("recovers malformed stream frames by resuming the same inference run", async () => {
+  const requests = [];
+  const previousFetch = globalThis.fetch;
+  const previousResumeDelay = process.env.IMPEL_INFERENCE_RESUME_DELAY_MS;
+  process.env.IMPEL_INFERENCE_RESUME_DELAY_MS = "0";
+
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+
+    if (String(url).endsWith("/v1/infer/start")) {
+      return new Response(
+        JSON.stringify({
+          runId: "run_parse",
+          streamUrl:
+            "/v1/infer/runs/run_parse/stream?startIndex=0&orgId=org_default",
+        }),
+        { status: 202, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    if (
+      String(url).endsWith(
+        "/v1/infer/runs/run_parse/stream?startIndex=0&orgId=org_default",
+      )
+    ) {
+      return new Response(
+        rawSse(
+          'data: {"type":"tool-input-delta","id":"tool","delta":"unterminated\n\n',
+        ),
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream",
+            "x-workflow-run-id": "run_parse",
+            "x-workflow-stream-tail-index": "6",
+          },
+        },
+      );
+    }
+
+    if (
+      String(url).endsWith(
+        "/v1/infer/runs/run_parse/stream?startIndex=7&orgId=org_default",
+      )
+    ) {
+      return new Response(
+        sse([
+          { type: "stream-start", warnings: [] },
+          { type: "text-start", id: "txt" },
+          { type: "text-delta", id: "txt", delta: "continued" },
+          { type: "text-end", id: "txt" },
+          finishPart(),
+          "[DONE]",
+        ]),
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/event-stream",
+            "x-workflow-run-id": "run_parse",
+          },
+        },
+      );
+    }
+
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  try {
+    const model = impelInference("claude-sonnet-4-5", {
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_default",
+    });
+
+    const result = await model.doGenerate({
+      prompt: [{ role: "user", content: [{ type: "text", text: "continue" }] }],
+    });
+
+    assert.equal(result.content[0].type, "text");
+    assert.equal(result.content[0].text, "continued");
+    assert.equal(
+      requests.filter((request) => request.url.endsWith("/v1/infer/start"))
+        .length,
+      1,
+    );
+    assert.ok(
+      requests.some((request) =>
+        request.url.endsWith(
+          "/v1/infer/runs/run_parse/stream?startIndex=7&orgId=org_default",
+        ),
+      ),
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousResumeDelay === undefined) {
+      delete process.env.IMPEL_INFERENCE_RESUME_DELAY_MS;
+    } else {
+      process.env.IMPEL_INFERENCE_RESUME_DELAY_MS = previousResumeDelay;
     }
   }
 });

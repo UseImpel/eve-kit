@@ -32,6 +32,7 @@ export interface ImpelClaudeModelOptions
   defaultModelId?: string;
   localModel?: ClaudeCodeModelId;
   defaultLocalModel?: ClaudeCodeModelId;
+  allowLocalProviderFallback?: boolean;
   headers?: ImpelInferenceHeaders;
   runContext?: ImpelInferenceRunContextProvider;
 }
@@ -139,6 +140,21 @@ function isDeployedServerlessRuntime(): boolean {
   );
 }
 
+function envBoolean(name: string): boolean | undefined {
+  const value = process.env[name]?.trim().toLowerCase();
+  if (!value) return undefined;
+  if (["1", "true", "yes", "on"].includes(value)) return true;
+  if (["0", "false", "no", "off"].includes(value)) return false;
+  return undefined;
+}
+
+function allowLocalProviderFallback(explicit?: boolean): boolean {
+  if (explicit !== undefined) return explicit;
+  const env = envBoolean("IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK");
+  if (env !== undefined) return env;
+  return process.env.NODE_ENV !== "production";
+}
+
 export function createImpelClaudeModel(
   options: ImpelClaudeModelOptions = {},
 ): LanguageModelV3 {
@@ -153,6 +169,7 @@ export function createImpelClaudeModel(
     allowDangerouslySkipPermissions,
     effort,
     cwd,
+    allowLocalProviderFallback: explicitAllowLocalProviderFallback,
     provider = "claude-code",
     ...inferenceOptions
   } = options;
@@ -204,6 +221,16 @@ export function createImpelClaudeModel(
         "credentials, which do not exist in a Vercel serverless runtime). Set " +
         "IMPEL_INFERENCE_URL (and IMPEL_INFERENCE_API_KEY) on this deployment, or " +
         "set IMPEL_ALLOW_CLAUDE_CODE_FALLBACK=1 to force the local provider.",
+    );
+  }
+
+  // Independent fallback gate (keyed on NODE_ENV / explicit option /
+  // IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK). This also covers non-Vercel production
+  // runtimes that isDeployedServerlessRuntime() cannot detect, and lets callers
+  // force-disable the local provider via `allowLocalProviderFallback: false`.
+  if (!allowLocalProviderFallback(explicitAllowLocalProviderFallback)) {
+    throw new Error(
+      "IMPEL_INFERENCE_URL or baseUrl is required for createImpelClaudeModel in production. Set IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK=true only for explicit local development.",
     );
   }
 
