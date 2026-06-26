@@ -78,6 +78,20 @@ interface GitHubInstallationToken {
   expiresAtMs: number;
 }
 
+type VercelConnectModule = {
+  getTokenResponse: (
+    connector: string,
+    params: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ) => Promise<Record<string, unknown>>;
+};
+
+const DEFAULT_GITHUB_CONNECTOR_UID = "github/useimpel-github";
+const optionalImport = new Function(
+  "specifier",
+  "return import(specifier)",
+) as (specifier: string) => Promise<unknown>;
+
 export function defaultImpelEveChannel({
   basicUser = process.env.EVE_APP_BASIC_USER ?? process.env.IMPEL_EVE_BASIC_USER,
   basicPassword =
@@ -453,7 +467,43 @@ async function resolveGitHubAccessToken(
     );
   }
 
+  const connectToken = await resolveVercelConnectGitHubToken(runContext);
+  if (connectToken) return connectToken;
+
   return createGitHubInstallationToken(String(runContext.installationId));
+}
+
+async function resolveVercelConnectGitHubToken(
+  runContext: ImpelEveRunContext,
+): Promise<string | null> {
+  if (process.env.IMPEL_EVE_GITHUB_CONNECT_ENABLED === "0") return null;
+
+  const installationId = runContext.installationId;
+  if (installationId === undefined) return null;
+
+  let connect: VercelConnectModule;
+  try {
+    connect = (await optionalImport("@vercel/connect")) as VercelConnectModule;
+  } catch {
+    return null;
+  }
+
+  try {
+    const response = await connect.getTokenResponse(
+      process.env.VERCEL_GITHUB_CONNECTOR_UID ?? DEFAULT_GITHUB_CONNECTOR_UID,
+      {
+        subject: { type: "app" },
+        installationId: String(installationId),
+      },
+    );
+    return typeof response.token === "string" ? response.token : null;
+  } catch (error) {
+    if (hasGitHubAppFallbackEnv()) return null;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Vercel Connect could not mint a GitHub installation token for Eve workspace checkout. ${message}`,
+    );
+  }
 }
 
 const githubInstallationTokenCache = new Map<string, GitHubInstallationToken>();
@@ -471,7 +521,7 @@ async function createGitHubInstallationToken(
 
   if (!appId || !privateKey) {
     throw new Error(
-      "Attached repo checkout requires GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY, or a static IMPEL_EVE_GITHUB_TOKEN/GITHUB_TOKEN/GH_TOKEN.",
+      "Attached repo checkout requires Vercel Connect GitHub app-subject access, GITHUB_APP_ID/GITHUB_APP_PRIVATE_KEY, or a static IMPEL_EVE_GITHUB_TOKEN/GITHUB_TOKEN/GH_TOKEN.",
     );
   }
 
@@ -545,6 +595,14 @@ function parseExpiryMs(value: unknown): number {
 
 function normalizePrivateKey(value: string): string {
   return value.replace(/\\n/g, "\n");
+}
+
+function hasGitHubAppFallbackEnv(): boolean {
+  return Boolean(
+    (process.env.IMPEL_EVE_GITHUB_APP_ID ?? process.env.GITHUB_APP_ID) &&
+      (process.env.IMPEL_EVE_GITHUB_APP_PRIVATE_KEY ??
+        process.env.GITHUB_APP_PRIVATE_KEY),
+  );
 }
 
 function parseGitHubRepo(value: string): GitHubRepoRef {
