@@ -52,6 +52,7 @@ export declare function extractImpelEveRunContextFromRequest(request: Request): 
 export declare function normalizeImpelEveRunContext(value: unknown): ImpelEveRunContext | null;
 export declare function normalizeClientContextMessages(value: unknown): string[] | undefined;
 export declare function planImpelEveRepoCheckouts(repoNames: readonly string[]): ImpelPlannedRepoCheckout[];
+export declare function createImpelWorkspaceContextMessage(runContext: ImpelEveRunContext | null): string | undefined;
 export declare function resolveVercelConnectGitHubConnectorUid(value?: string | undefined): string;
 export declare function createVercelConnectGitHubTokenParams(runContext: ImpelEveRunContext): Record<string, unknown>;
 //# sourceMappingURL=channel.d.ts.map

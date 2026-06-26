@@ -343,10 +343,29 @@ function parseMessageField(value) {
 }
 function parseClientContextField(value) {
     try {
-        return normalizeClientContextMessages(value);
+        return withWorkspaceContextMessages(value, normalizeClientContextMessages(value));
     }
     catch (error) {
         return jsonError(error instanceof Error ? error.message : String(error), 400);
+    }
+}
+function withWorkspaceContextMessages(clientContext, messages) {
+    const workspaceContext = createImpelWorkspaceContextMessage(normalizeImpelEveRunContextFromClientContext(clientContext));
+    if (!workspaceContext)
+        return messages;
+    return [...(messages ?? []), workspaceContext];
+}
+function normalizeImpelEveRunContextFromClientContext(value) {
+    const direct = normalizeImpelEveRunContext(value);
+    if (direct)
+        return direct;
+    if (typeof value !== "string" || value.trim() === "")
+        return null;
+    try {
+        return normalizeImpelEveRunContext(JSON.parse(value));
+    }
+    catch {
+        return null;
     }
 }
 function parseInputResponsesField(value) {
@@ -430,6 +449,27 @@ export function planImpelEveRepoCheckouts(repoNames) {
         path: repo.path,
         role: repo.role,
     }));
+}
+export function createImpelWorkspaceContextMessage(runContext) {
+    if (!runContext?.repos?.length)
+        return undefined;
+    const plan = createWorkspaceCheckoutPlan(runContext.repos);
+    const lines = [
+        "Impel workspace context:",
+        `- Layout: ${plan.layout}`,
+        "- The Eve sandbox command working directory is /workspace.",
+    ];
+    if (plan.layout === "multi-repo-directory") {
+        lines.push("- /workspace is a coordination directory, not a git checkout.", "- The attached repositories are already cloned at these paths:");
+    }
+    else {
+        lines.push("- The attached repository is already cloned at this path:");
+    }
+    for (const repo of plan.repos) {
+        lines.push(`  - ${repo.repo}: ${repo.path}`);
+    }
+    lines.push("- Use git commands against the listed paths, for example: git -C <path> rev-list --count HEAD.", "- Do not ask the user for repo paths or GitHub tokens before checking these workspace paths.", "- Workspace metadata is also available at /workspace/.impel/run-context.json and /workspace/README_IMPEL_WORKSPACE.md.");
+    return lines.join("\n");
 }
 function createWorkspaceCheckoutPlan(repoNames) {
     const repoRefs = repoNames.map(parseGitHubRepo);

@@ -18,6 +18,7 @@ import {
 } from "../dist/eve/connections/claude-bridge.js";
 import {
   createImpelEveChannelState,
+  createImpelWorkspaceContextMessage,
   createVercelConnectGitHubTokenParams,
   defaultImpelEveChannel,
   extractImpelEveRunContextFromRequest,
@@ -317,6 +318,31 @@ test("Impel Eve repo checkout planning disambiguates duplicate short names", () 
   );
 });
 
+test("Impel Eve workspace context tells the model the multi-repo checkout paths", () => {
+  assert.equal(
+    createImpelWorkspaceContextMessage({
+      repos: [
+        "UseImpel/next",
+        "UseImpel/impel-inference",
+        "UseImpel/impel-ingestion",
+      ],
+    }),
+    [
+      "Impel workspace context:",
+      "- Layout: multi-repo-directory",
+      "- The Eve sandbox command working directory is /workspace.",
+      "- /workspace is a coordination directory, not a git checkout.",
+      "- The attached repositories are already cloned at these paths:",
+      "  - UseImpel/next: /workspace/next",
+      "  - UseImpel/impel-inference: /workspace/impel-inference",
+      "  - UseImpel/impel-ingestion: /workspace/impel-ingestion",
+      "- Use git commands against the listed paths, for example: git -C <path> rev-list --count HEAD.",
+      "- Do not ask the user for repo paths or GitHub tokens before checking these workspace paths.",
+      "- Workspace metadata is also available at /workspace/.impel/run-context.json and /workspace/README_IMPEL_WORKSPACE.md.",
+    ].join("\n"),
+  );
+});
+
 test("default Impel Eve session route seeds channel state from clientContext", async () => {
   const channel = defaultImpelEveChannel({
     basicUser: "user",
@@ -377,6 +403,16 @@ test("default Impel Eve session route seeds channel state from clientContext", a
   assert.match(sent[0].options.continuationToken, /^eve:/);
   assert.deepEqual(sent[0].input.context, [
     'Client context:\n{"orgId":"impel","repos":["UseImpel/next"],"branch":"main"}',
+    [
+      "Impel workspace context:",
+      "- Layout: single-repo-root",
+      "- The Eve sandbox command working directory is /workspace.",
+      "- The attached repository is already cloned at this path:",
+      "  - UseImpel/next: /workspace",
+      "- Use git commands against the listed paths, for example: git -C <path> rev-list --count HEAD.",
+      "- Do not ask the user for repo paths or GitHub tokens before checking these workspace paths.",
+      "- Workspace metadata is also available at /workspace/.impel/run-context.json and /workspace/README_IMPEL_WORKSPACE.md.",
+    ].join("\n"),
   ]);
 });
 
