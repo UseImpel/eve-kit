@@ -1,6 +1,6 @@
 {
   "name": "@useimpel/eve-kit",
-  "version": "0.2.26",
+  "version": "0.2.27",
   "description": "Eve helpers and AI SDK provider for Impel's durable inference service.",
   "type": "module",
   "repository": {
@@ -74,6 +74,7 @@
   },
   "dependencies": {
     "@ai-sdk/provider-utils": "5.0.0-beta.49",
+    "@vercel/connect": "0.2.2",
     "ai": "^6.0.208",
     "zod": "4.4.3"
   },

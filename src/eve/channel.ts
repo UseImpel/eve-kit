@@ -93,10 +93,6 @@ type VercelConnectModule = {
 const DEFAULT_GITHUB_CONNECTOR_UID = "github/useimpel-github";
 const EVE_SESSION_ID_HEADER = "x-eve-session-id";
 const EVE_MESSAGE_STREAM_CONTENT_TYPE = "application/x-ndjson; charset=utf-8";
-const optionalImport = new Function(
-  "specifier",
-  "return import(specifier)",
-) as (specifier: string) => Promise<unknown>;
 
 export function defaultImpelEveChannel({
   basicUser = process.env.EVE_APP_BASIC_USER ?? process.env.IMPEL_EVE_BASIC_USER,
@@ -823,12 +819,13 @@ async function resolveVercelConnectGitHubToken(
 ): Promise<string | null> {
   if (process.env.IMPEL_EVE_GITHUB_CONNECT_ENABLED === "0") return null;
 
-  let connect: VercelConnectModule;
+  let connect: VercelConnectModule | null;
   try {
-    connect = (await optionalImport("@vercel/connect")) as VercelConnectModule;
+    connect = (await import("@vercel/connect")) as unknown as VercelConnectModule;
   } catch {
     return null;
   }
+  if (!connect) return null;
 
   try {
     const response = await connect.getTokenResponse(

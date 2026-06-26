@@ -4,7 +4,6 @@ import { httpBasic, localDev, placeholderAuth, routeAuth, vercelOidc, } from "ev
 const DEFAULT_GITHUB_CONNECTOR_UID = "github/useimpel-github";
 const EVE_SESSION_ID_HEADER = "x-eve-session-id";
 const EVE_MESSAGE_STREAM_CONTENT_TYPE = "application/x-ndjson; charset=utf-8";
-const optionalImport = new Function("specifier", "return import(specifier)");
 export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_USER ?? process.env.IMPEL_EVE_BASIC_USER, basicPassword = process.env.EVE_APP_BASIC_PASSWORD ?? process.env.IMPEL_EVE_BASIC_PASSWORD, includePlaceholderAuth = false, prepareAttachedRepos = true, checkoutDepth = readCheckoutDepthFromEnv(), } = {}) {
     const basic = basicUser && basicPassword
         ? [httpBasic({ username: basicUser, password: basicPassword })]
@@ -522,11 +521,13 @@ async function resolveVercelConnectGitHubToken(runContext) {
         return null;
     let connect;
     try {
-        connect = (await optionalImport("@vercel/connect"));
+        connect = (await import("@vercel/connect"));
     }
     catch {
         return null;
     }
+    if (!connect)
+        return null;
     try {
         const response = await connect.getTokenResponse(resolveVercelConnectGitHubConnectorUid(), createVercelConnectGitHubTokenParams(runContext));
         return typeof response.token === "string" ? response.token : null;
