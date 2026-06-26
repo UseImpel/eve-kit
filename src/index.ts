@@ -296,9 +296,22 @@ function redactedError(error: unknown): Error {
   return errorFromUnknown(error, "impel-inference provider error");
 }
 
-function headersInitToRecord(headers: HeadersInit | undefined): Record<string, string> {
+function headersInitToRecord(
+  headers: HeadersInit | undefined,
+): Record<string, string> {
   if (!headers) return {};
   return Object.fromEntries(new Headers(headers).entries());
+}
+
+function definedStringHeaders(
+  headers: Record<string, string | undefined> | undefined,
+): Record<string, string> {
+  if (!headers) return {};
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (value !== undefined) result[key] = value;
+  }
+  return result;
 }
 
 async function resolveExtraHeaders(
@@ -313,13 +326,16 @@ async function inferenceHeaders({
   apiKey,
   orgId,
   extraHeaders,
+  callHeaders,
 }: {
   apiKey: string;
   orgId: string;
   extraHeaders?: ImpelInferenceHeaders;
+  callHeaders?: Record<string, string | undefined>;
 }): Promise<Record<string, string>> {
   return {
     ...(await resolveExtraHeaders(extraHeaders)),
+    ...definedStringHeaders(callHeaders),
     authorization: `Bearer ${apiKey}`,
     "x-org-id": orgId,
     "x-impel-org-id": orgId,
@@ -348,21 +364,85 @@ async function inferenceResponseError(response: Response): Promise<Error> {
   );
 }
 
+function serializeJsonBody(body: unknown): string {
+  try {
+    assertJsonSerializable(body);
+    const serialized = JSON.stringify(body);
+    if (serialized === undefined) {
+      throw new TypeError("request body serialized to undefined");
+    }
+    return serialized;
+  } catch (error) {
+    throw errorFromUnknown(
+      error,
+      "impel-inference request body is not JSON serializable",
+    );
+  }
+}
+
+function assertJsonSerializable(
+  value: unknown,
+  path = "request body",
+  seen: WeakSet<object> = new WeakSet(),
+): void {
+  if (value === null || value === undefined) return;
+
+  const valueType = typeof value;
+  if (
+    valueType === "string" ||
+    valueType === "number" ||
+    valueType === "boolean"
+  ) {
+    return;
+  }
+
+  if (
+    valueType === "bigint" ||
+    valueType === "function" ||
+    valueType === "symbol"
+  ) {
+    throw new TypeError(`${path} contains non-JSON value: ${valueType}`);
+  }
+
+  if (valueType !== "object") return;
+  const object = value as object;
+  if (seen.has(object)) {
+    throw new TypeError(`${path} contains a circular reference`);
+  }
+  seen.add(object);
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      assertJsonSerializable(item, `${path}[${index}]`, seen),
+    );
+    seen.delete(object);
+    return;
+  }
+
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    assertJsonSerializable(item, `${path}.${key}`, seen);
+  }
+  seen.delete(object);
+}
+
 async function openInferenceStream({
   url,
   headers,
   body,
   method = "GET",
+  signal,
 }: {
   url: string;
   headers: Record<string, string>;
   body?: unknown;
   method?: "GET" | "POST";
+  signal?: AbortSignal;
 }): Promise<InferenceStream> {
   const response = await fetch(url, {
     method,
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? undefined : serializeJsonBody(body),
+    signal,
   });
 
   if (!response.ok) throw await inferenceResponseError(response);
@@ -386,16 +466,19 @@ async function startInferenceStream({
   headers,
   body,
   orgId,
+  signal,
 }: {
   baseUrl: string;
   headers: Record<string, string>;
   body: unknown;
   orgId: string;
+  signal?: AbortSignal;
 }): Promise<InferenceStream> {
   const response = await fetch(`${baseUrl}/v1/infer/start`, {
     method: "POST",
     headers,
-    body: JSON.stringify(body),
+    body: serializeJsonBody(body),
+    signal,
   });
 
   if (response.status === 404 || response.status === 405) {
@@ -428,7 +511,11 @@ async function startInferenceStream({
   if (!streamUrl.searchParams.has("orgId")) {
     streamUrl.searchParams.set("orgId", orgId);
   }
-  const stream = await openInferenceStream({ url: streamUrl.toString(), headers });
+  const stream = await openInferenceStream({
+    url: streamUrl.toString(),
+    headers,
+    signal,
+  });
   return {
     stream: stream.stream,
     runId: stream.runId ?? runId,
@@ -436,8 +523,32 @@ async function startInferenceStream({
   };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function abortError(signal: AbortSignal | undefined): Error {
+  if (signal?.reason instanceof Error) return signal.reason;
+  const error = new Error(
+    typeof signal?.reason === "string"
+      ? signal.reason
+      : "The operation was aborted",
+  );
+  error.name = "AbortError";
+  return error;
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortError(signal));
+  if (ms <= 0) return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(abortError(signal));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function providerMetadata(
@@ -700,6 +811,8 @@ function safeCallOptions(options: LanguageModelV3CallOptions) {
     responseFormat,
     tools,
     toolChoice,
+    includeRawChunks,
+    providerOptions,
   } = options;
   return {
     temperature,
@@ -713,6 +826,8 @@ function safeCallOptions(options: LanguageModelV3CallOptions) {
     responseFormat,
     tools,
     toolChoice,
+    includeRawChunks,
+    providerOptions,
   };
 }
 
@@ -782,10 +897,7 @@ export function impelInference(
       provider: opts?.provider ?? "claude-code",
       modelId,
       prompt: options.prompt,
-      providerOptions: {
-        ...(options.providerOptions ?? {}),
-        ...constructorProviderOptions,
-      },
+      providerOptions: constructorProviderOptions,
       callOptions: safeCallOptions(options),
       orgId,
       repos,
@@ -804,6 +916,7 @@ export function impelInference(
       apiKey,
       orgId,
       extraHeaders: opts?.headers,
+      callHeaders: options.headers,
     });
 
     async function createInferenceRun(): Promise<InferenceStream> {
@@ -813,11 +926,18 @@ export function impelInference(
           headers,
           body,
           method: "POST",
+          signal: options.abortSignal,
         });
       }
 
       try {
-        return await startInferenceStream({ baseUrl, headers, body, orgId });
+        return await startInferenceStream({
+          baseUrl,
+          headers,
+          body,
+          orgId,
+          signal: options.abortSignal,
+        });
       } catch (error) {
         if (!(error instanceof StartEndpointUnavailableError)) throw error;
         return await openInferenceStream({
@@ -825,6 +945,7 @@ export function impelInference(
           headers,
           body,
           method: "POST",
+          signal: options.abortSignal,
         });
       }
     }
@@ -1052,7 +1173,10 @@ export function impelInference(
                 resumeAttempts = 0;
                 parseResumeAttempts = 0;
                 lastParseResumeStartIndex = undefined;
-                await sleep(transientDelayMs * transientAttempts);
+                await sleep(
+                  transientDelayMs * transientAttempts,
+                  options.abortSignal,
+                );
                 const restarted = await createInferenceRun();
                 inferenceRunId = restarted.runId;
                 current = restarted;
@@ -1063,7 +1187,10 @@ export function impelInference(
                 const runId = inferenceRunId;
                 resumeAttempts += 1;
                 parseResumeAttempts += 1;
-                await sleep(resumeDelayMs * Math.min(resumeAttempts, 5));
+                await sleep(
+                  resumeDelayMs * Math.min(resumeAttempts, 5),
+                  options.abortSignal,
+                );
                 const startIndex = resumeStartIndex;
                 lastParseResumeStartIndex = startIndex;
                 skipAlreadySeen = startIndex === 0 ? upstreamPartCount : 0;
@@ -1073,6 +1200,7 @@ export function impelInference(
                     `${encodeURIComponent(runId)}/stream?startIndex=${startIndex}` +
                     `&orgId=${encodeURIComponent(orgId)}`,
                   headers,
+                  signal: options.abortSignal,
                 });
                 inferenceRunId = resumed.runId ?? runId;
                 resumeStartIndex = resumed.nextStartIndex ?? startIndex;
@@ -1100,7 +1228,7 @@ export function impelInference(
                 !pendingFinish
               ) {
                 resumeAttempts += 1;
-                await sleep(resumeDelayMs);
+                await sleep(resumeDelayMs, options.abortSignal);
                 const startIndex = resumeStartIndex;
                 skipAlreadySeen = startIndex === 0 ? upstreamPartCount : 0;
                 const resumed = await openInferenceStream({
@@ -1109,6 +1237,7 @@ export function impelInference(
                     `${encodeURIComponent(inferenceRunId)}/stream?startIndex=${startIndex}` +
                     `&orgId=${encodeURIComponent(orgId)}`,
                   headers,
+                  signal: options.abortSignal,
                 });
                 inferenceRunId = resumed.runId ?? inferenceRunId;
                 resumeStartIndex = resumed.nextStartIndex ?? startIndex;
@@ -1195,6 +1324,7 @@ export function impelInference(
             break;
           }
           case "tool-call":
+          case "tool-approval-request":
           case "tool-result":
           case "file":
           case "source":

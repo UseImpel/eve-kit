@@ -234,6 +234,7 @@ test("model-stream transport forwards tools and toolChoice in callOptions", asyn
       tools: [tool],
       toolChoice,
       temperature: 0.2,
+      includeRawChunks: true,
     });
     await stream.cancel();
 
@@ -242,12 +243,13 @@ test("model-stream transport forwards tools and toolChoice in callOptions", asyn
     assert.deepEqual(body.callOptions.tools, [tool]);
     assert.deepEqual(body.callOptions.toolChoice, toolChoice);
     assert.equal(body.callOptions.temperature, 0.2);
+    assert.equal(body.callOptions.includeRawChunks, true);
   } finally {
     globalThis.fetch = previousFetch;
   }
 });
 
-test("model-stream transport does not serialize abortSignal or per-call headers", async () => {
+test("model-stream transport applies per-call headers and does not serialize runtime-only options", async () => {
   const requests = [];
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
@@ -260,6 +262,7 @@ test("model-stream transport does not serialize abortSignal or per-call headers"
   };
 
   try {
+    const signal = AbortSignal.timeout(1_000);
     const model = impelInference("claude-opus-4-8", {
       baseUrl: "https://infer.example",
       apiKey: "secret",
@@ -269,8 +272,13 @@ test("model-stream transport does not serialize abortSignal or per-call headers"
     const { stream } = await model.doStream({
       prompt: [],
       temperature: 0.4,
-      abortSignal: AbortSignal.timeout(1_000),
-      headers: { "x-should-not-forward": "1" },
+      abortSignal: signal,
+      headers: {
+        "x-call-header": "1",
+        authorization: "ignored",
+        "x-org-id": "ignored",
+        "x-impel-org-id": "ignored",
+      },
     });
     await stream.cancel();
 
@@ -278,6 +286,79 @@ test("model-stream transport does not serialize abortSignal or per-call headers"
     assert.equal(body.callOptions.temperature, 0.4);
     assert.equal("abortSignal" in body.callOptions, false);
     assert.equal("headers" in body.callOptions, false);
+    assert.equal(requests[0].init.signal, signal);
+    assert.equal(requests[0].init.headers["x-call-header"], "1");
+    assert.equal(requests[0].init.headers.authorization, "Bearer secret");
+    assert.equal(requests[0].init.headers["x-org-id"], "org_tools");
+    assert.equal(requests[0].init.headers["x-impel-org-id"], "org_tools");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("model-stream transport keeps constructor and per-call providerOptions separate", async () => {
+  const requests = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+
+    return new Response(
+      sse([{ type: "stream-start", warnings: [] }, finishPart(), "[DONE]"]),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  };
+
+  try {
+    const constructorProviderOptions = {
+      permissionMode: "bypassPermissions",
+      shared: "constructor",
+    };
+    const callProviderOptions = {
+      "claude-code": { maxTurns: 2 },
+      shared: "call",
+    };
+    const model = impelInference("claude-opus-4-8", {
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_tools",
+      providerOptions: constructorProviderOptions,
+    });
+
+    const { stream } = await model.doStream({
+      prompt: [],
+      providerOptions: callProviderOptions,
+    });
+    await stream.cancel();
+
+    const body = JSON.parse(String(requests[0].init.body));
+    assert.deepEqual(body.providerOptions, constructorProviderOptions);
+    assert.deepEqual(body.callOptions.providerOptions, callProviderOptions);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("model-stream transport rejects non-JSON call options before fetch", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    assert.fail("fetch should not be called for non-JSON request bodies");
+  };
+
+  try {
+    const model = impelInference("claude-opus-4-8", {
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_tools",
+    });
+
+    await assert.rejects(
+      () =>
+        model.doStream({
+          prompt: [],
+          providerOptions: { bad: () => undefined },
+        }),
+      /request body\.callOptions\.providerOptions\.bad contains non-JSON value: function/,
+    );
   } finally {
     globalThis.fetch = previousFetch;
   }
@@ -289,6 +370,11 @@ test("doGenerate surfaces hosted tool-call stream parts", async () => {
     new Response(
       sse([
         { type: "stream-start", warnings: [] },
+        {
+          type: "tool-approval-request",
+          approvalId: "approval_1",
+          toolCallId: "call_1",
+        },
         {
           type: "tool-call",
           toolCallId: "call_1",
@@ -311,6 +397,11 @@ test("doGenerate surfaces hosted tool-call stream parts", async () => {
     const result = await model.doGenerate({ prompt: [] });
 
     assert.deepEqual(result.content, [
+      {
+        type: "tool-approval-request",
+        approvalId: "approval_1",
+        toolCallId: "call_1",
+      },
       {
         type: "tool-call",
         toolCallId: "call_1",
