@@ -3,6 +3,9 @@ export const IMPEL_EVE_DEFAULT_CONTEXT_WINDOW_TOKENS =
   DEFAULT_CONTEXT_WINDOW_TOKENS;
 
 const LEGACY_MODEL_IDS: Record<string, string> = {
+  haiku: "anthropic/claude-haiku-4.5",
+  opus: "anthropic/claude-opus-4.8",
+  sonnet: "anthropic/claude-sonnet-4.6",
   "claude-haiku-4-5": "anthropic/claude-haiku-4.5",
   "claude-opus-4": "anthropic/claude-opus-4",
   "claude-opus-4-1": "anthropic/claude-opus-4.1",

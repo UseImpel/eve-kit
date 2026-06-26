@@ -89,6 +89,9 @@ test("normalizes legacy Impel model ids to AI Gateway ids", () => {
   assert.equal(DEFAULT_CONTEXT_WINDOW_TOKENS, 200000);
   assert.equal(toGatewayModelId("claude-opus-4-8"), "anthropic/claude-opus-4.8");
   assert.equal(toGatewayModelId("claude-sonnet-4-6"), "anthropic/claude-sonnet-4.6");
+  assert.equal(toGatewayModelId("opus"), "anthropic/claude-opus-4.8");
+  assert.equal(toGatewayModelId("sonnet"), "anthropic/claude-sonnet-4.6");
+  assert.equal(toGatewayModelId("haiku"), "anthropic/claude-haiku-4.5");
   assert.equal(toGatewayModelId("gpt-5.5"), "openai/gpt-5.5");
   assert.equal(toGatewayModelId("anthropic/claude-opus-4.8"), "anthropic/claude-opus-4.8");
 });

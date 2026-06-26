@@ -25,7 +25,15 @@ export class ImpelRuntimeSmokeError extends Error {
         this.name = "ImpelRuntimeSmokeError";
     }
 }
-export async function smokeDeployedRuntime({ baseUrl, message = "Reply briefly: ready.", clientContext, timeoutMs = 120000, successOnText = false, basicUser = process.env.EVE_APP_BASIC_USER ?? process.env.IMPEL_EVE_BASIC_USER, basicPassword = process.env.EVE_APP_BASIC_PASSWORD ?? process.env.IMPEL_EVE_BASIC_PASSWORD, bearerToken, fetch: fetchImpl = fetch, log = () => { }, }) {
+function nonEmptyEnv(...names) {
+    for (const name of names) {
+        const value = process.env[name]?.trim();
+        if (value)
+            return value;
+    }
+    return undefined;
+}
+export async function smokeDeployedRuntime({ baseUrl, message = "Reply briefly: ready.", clientContext, timeoutMs = 120000, successOnText = false, basicUser = nonEmptyEnv("EVE_APP_BASIC_USER", "IMPEL_EVE_BASIC_USER"), basicPassword = nonEmptyEnv("EVE_APP_BASIC_PASSWORD", "IMPEL_EVE_BASIC_PASSWORD"), bearerToken, fetch: fetchImpl = fetch, log = () => { }, }) {
     const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
     if (!normalizedBaseUrl) {
         throw new ImpelRuntimeSmokeError("baseUrl is required");
