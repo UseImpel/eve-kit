@@ -18,6 +18,7 @@ import {
 } from "../dist/eve/connections/claude-bridge.js";
 import {
   createImpelEveChannelState,
+  createVercelConnectGitHubTokenParams,
   defaultImpelEveChannel,
   extractImpelEveRunContextFromRequest,
   normalizeImpelEveRunContext,
@@ -263,6 +264,20 @@ test("default Impel Eve channel is stateful for workspace preparation", () => {
   assert.equal(channel.routes.length, 3);
   assert.equal(channel.adapter.kind, "defineChannel");
   assert.deepEqual(channel.adapter.state, createImpelEveChannelState(null));
+});
+
+test("Vercel Connect GitHub token params support the connector default installation", () => {
+  assert.deepEqual(createVercelConnectGitHubTokenParams({}), {
+    subject: { type: "app" },
+  });
+
+  assert.deepEqual(
+    createVercelConnectGitHubTokenParams({ installationId: 12345 }),
+    {
+      subject: { type: "app" },
+      installationId: "12345",
+    },
+  );
 });
 
 test("impelInference uses hosted model stream by default", async () => {

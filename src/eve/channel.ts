@@ -461,25 +461,22 @@ async function resolveGitHubAccessToken(
     process.env.GH_TOKEN;
   if (staticToken) return staticToken;
 
-  if (runContext.installationId === undefined) {
-    throw new Error(
-      "Attached repo checkout requires clientContext.installationId or IMPEL_EVE_GITHUB_TOKEN/GITHUB_TOKEN/GH_TOKEN.",
-    );
-  }
-
   const connectToken = await resolveVercelConnectGitHubToken(runContext);
   if (connectToken) return connectToken;
 
-  return createGitHubInstallationToken(String(runContext.installationId));
+  if (runContext.installationId !== undefined) {
+    return createGitHubInstallationToken(String(runContext.installationId));
+  }
+
+  throw new Error(
+    "Attached repo checkout requires Vercel Connect GitHub app-subject access, clientContext.installationId with GitHub App fallback env, or a static IMPEL_EVE_GITHUB_TOKEN/GITHUB_TOKEN/GH_TOKEN.",
+  );
 }
 
 async function resolveVercelConnectGitHubToken(
   runContext: ImpelEveRunContext,
 ): Promise<string | null> {
   if (process.env.IMPEL_EVE_GITHUB_CONNECT_ENABLED === "0") return null;
-
-  const installationId = runContext.installationId;
-  if (installationId === undefined) return null;
 
   let connect: VercelConnectModule;
   try {
@@ -491,10 +488,7 @@ async function resolveVercelConnectGitHubToken(
   try {
     const response = await connect.getTokenResponse(
       process.env.VERCEL_GITHUB_CONNECTOR_UID ?? DEFAULT_GITHUB_CONNECTOR_UID,
-      {
-        subject: { type: "app" },
-        installationId: String(installationId),
-      },
+      createVercelConnectGitHubTokenParams(runContext),
     );
     return typeof response.token === "string" ? response.token : null;
   } catch (error) {
@@ -504,6 +498,18 @@ async function resolveVercelConnectGitHubToken(
       `Vercel Connect could not mint a GitHub installation token for Eve workspace checkout. ${message}`,
     );
   }
+}
+
+export function createVercelConnectGitHubTokenParams(
+  runContext: ImpelEveRunContext,
+): Record<string, unknown> {
+  return stripUndefined({
+    subject: { type: "app" },
+    installationId:
+      runContext.installationId === undefined
+        ? undefined
+        : String(runContext.installationId),
+  });
 }
 
 const githubInstallationTokenCache = new Map<string, GitHubInstallationToken>();
