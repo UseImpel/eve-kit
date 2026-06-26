@@ -478,7 +478,7 @@ async function prepareWorkspaceRoot(sandbox, layout) {
     }
     await runSandboxCommand(sandbox, "prepare multi-repo workspace root", [
         "mkdir -p /workspace",
-        "rm -rf /workspace/.git /workspace/repos",
+        "find /workspace -mindepth 1 -maxdepth 1 ! -name skills -exec rm -rf {} +",
         "mkdir -p /workspace/.impel",
     ].join("\n"));
 }
