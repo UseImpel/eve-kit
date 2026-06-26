@@ -1,5 +1,6 @@
 export * from "./model.js";
 export * from "./channel.js";
+export * from "./gateway.js";
 export * from "./sandbox.js";
 export * from "./render-ui.js";
 export * from "./evals.js";

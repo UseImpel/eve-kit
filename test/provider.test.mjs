@@ -5,6 +5,16 @@ import {
   createImpelClaudeModel,
   createImpelCodexModel,
 } from "../dist/eve/model.js";
+import {
+  DEFAULT_CONTEXT_WINDOW_TOKENS,
+  resolveGatewayModelId,
+  toGatewayModelId,
+} from "../dist/eve/gateway.js";
+import {
+  IMPEL_CLAUDE_BRIDGE_EXECUTE_TOOL,
+  IMPEL_CLAUDE_BRIDGE_READ_ONLY_TOOLS,
+  impelClaudeBridgeConnection,
+} from "../dist/eve/connections/claude-bridge.js";
 
 function sse(parts) {
   return new ReadableStream({
@@ -74,6 +84,77 @@ function finishPart() {
     },
   };
 }
+
+test("normalizes legacy Impel model ids to AI Gateway ids", () => {
+  assert.equal(DEFAULT_CONTEXT_WINDOW_TOKENS, 200000);
+  assert.equal(toGatewayModelId("claude-opus-4-8"), "anthropic/claude-opus-4.8");
+  assert.equal(toGatewayModelId("claude-sonnet-4-6"), "anthropic/claude-sonnet-4.6");
+  assert.equal(toGatewayModelId("gpt-5.5"), "openai/gpt-5.5");
+  assert.equal(toGatewayModelId("anthropic/claude-opus-4.8"), "anthropic/claude-opus-4.8");
+});
+
+test("resolves AI Gateway model ids from env in priority order", () => {
+  const previousPrimary = process.env.IMPEL_TEST_MODEL_PRIMARY;
+  const previousFallback = process.env.IMPEL_TEST_MODEL_FALLBACK;
+
+  try {
+    delete process.env.IMPEL_TEST_MODEL_PRIMARY;
+    process.env.IMPEL_TEST_MODEL_FALLBACK = "claude-sonnet-4-6";
+    assert.equal(
+      resolveGatewayModelId(
+        ["IMPEL_TEST_MODEL_PRIMARY", "IMPEL_TEST_MODEL_FALLBACK"],
+        "anthropic/claude-opus-4.8",
+      ),
+      "anthropic/claude-sonnet-4.6",
+    );
+
+    process.env.IMPEL_TEST_MODEL_PRIMARY = "openai/gpt-5.5";
+    assert.equal(
+      resolveGatewayModelId(
+        ["IMPEL_TEST_MODEL_PRIMARY", "IMPEL_TEST_MODEL_FALLBACK"],
+        "anthropic/claude-opus-4.8",
+      ),
+      "openai/gpt-5.5",
+    );
+  } finally {
+    if (previousPrimary === undefined) delete process.env.IMPEL_TEST_MODEL_PRIMARY;
+    else process.env.IMPEL_TEST_MODEL_PRIMARY = previousPrimary;
+    if (previousFallback === undefined) delete process.env.IMPEL_TEST_MODEL_FALLBACK;
+    else process.env.IMPEL_TEST_MODEL_FALLBACK = previousFallback;
+  }
+});
+
+test("defines Claude Bridge as a filtered Eve MCP connection", async () => {
+  const connection = impelClaudeBridgeConnection({
+    url: "https://bridge.example/sse",
+    token: "bridge-token",
+  });
+
+  assert.equal(connection.url, "https://bridge.example/sse");
+  assert.deepEqual(connection.tools, {
+    allow: [...IMPEL_CLAUDE_BRIDGE_READ_ONLY_TOOLS],
+  });
+  assert.equal(connection.auth?.principalType, "app");
+  assert.equal((await connection.auth?.getToken()).token, "bridge-token");
+});
+
+test("keeps Claude Bridge execution opt-in", () => {
+  const readOnlyConnection = impelClaudeBridgeConnection({
+    url: "https://bridge.example/sse",
+  });
+  assert.equal(
+    readOnlyConnection.tools?.allow.includes(IMPEL_CLAUDE_BRIDGE_EXECUTE_TOOL),
+    false,
+  );
+
+  const executeConnection = impelClaudeBridgeConnection({
+    url: "https://bridge.example/sse",
+    includeExecuteTool: true,
+  });
+  assert.ok(
+    executeConnection.tools?.allow.includes(IMPEL_CLAUDE_BRIDGE_EXECUTE_TOOL),
+  );
+});
 
 test("impelInference uses hosted model stream by default", async () => {
   const requests = [];
