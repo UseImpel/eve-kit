@@ -38,6 +38,7 @@ export interface ImpelCodexModelOptions extends Omit<ImpelInferenceOptions, "pro
 }
 export interface ImpelOpenAIResponsesModelOptions extends ImpelCodexModelOptions {
 }
+export declare function resolveImpelModelId(envNames: readonly string[], defaultModelId: string): string;
 export declare function createImpelClaudeProviderOptions({ providerOptions, permissionMode, allowDangerouslySkipPermissions, effort, cwd, }?: ImpelClaudeProviderOptionsInput): ClaudeCodeSettings;
 export declare function resolveImpelClaudeModelId({ modelId, defaultModelId, }?: {
     modelId?: string;

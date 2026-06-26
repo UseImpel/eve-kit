@@ -4,6 +4,7 @@ import { impelInference } from "../dist/index.js";
 import {
   createImpelClaudeModel,
   createImpelCodexModel,
+  resolveImpelModelId,
 } from "../dist/eve/model.js";
 import {
   DEFAULT_CONTEXT_WINDOW_TOKENS,
@@ -118,6 +119,37 @@ test("resolves AI Gateway model ids from env in priority order", () => {
         "anthropic/claude-opus-4.8",
       ),
       "openai/gpt-5.5",
+    );
+  } finally {
+    if (previousPrimary === undefined) delete process.env.IMPEL_TEST_MODEL_PRIMARY;
+    else process.env.IMPEL_TEST_MODEL_PRIMARY = previousPrimary;
+    if (previousFallback === undefined) delete process.env.IMPEL_TEST_MODEL_FALLBACK;
+    else process.env.IMPEL_TEST_MODEL_FALLBACK = previousFallback;
+  }
+});
+
+test("resolves raw impel-inference model ids from env without Gateway normalization", () => {
+  const previousPrimary = process.env.IMPEL_TEST_MODEL_PRIMARY;
+  const previousFallback = process.env.IMPEL_TEST_MODEL_FALLBACK;
+
+  try {
+    delete process.env.IMPEL_TEST_MODEL_PRIMARY;
+    process.env.IMPEL_TEST_MODEL_FALLBACK = "claude-sonnet-4-6";
+    assert.equal(
+      resolveImpelModelId(
+        ["IMPEL_TEST_MODEL_PRIMARY", "IMPEL_TEST_MODEL_FALLBACK"],
+        "claude-opus-4-8",
+      ),
+      "claude-sonnet-4-6",
+    );
+
+    process.env.IMPEL_TEST_MODEL_PRIMARY = "anthropic/claude-opus-4.8";
+    assert.equal(
+      resolveImpelModelId(
+        ["IMPEL_TEST_MODEL_PRIMARY", "IMPEL_TEST_MODEL_FALLBACK"],
+        "claude-opus-4-8",
+      ),
+      "anthropic/claude-opus-4.8",
     );
   } finally {
     if (previousPrimary === undefined) delete process.env.IMPEL_TEST_MODEL_PRIMARY;

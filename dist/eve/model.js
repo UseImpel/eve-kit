@@ -5,6 +5,14 @@ export const IMPEL_DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";
 export const IMPEL_CODEX_CONTEXT_WINDOW_TOKENS = 200000;
 export const IMPEL_DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
 export const IMPEL_DEFAULT_OPENAI_RESPONSES_MODEL_ID = IMPEL_DEFAULT_CODEX_MODEL_ID;
+export function resolveImpelModelId(envNames, defaultModelId) {
+    for (const name of envNames) {
+        const value = process.env[name]?.trim();
+        if (value)
+            return value;
+    }
+    return defaultModelId;
+}
 export function createImpelClaudeProviderOptions({ providerOptions, permissionMode = "bypassPermissions", allowDangerouslySkipPermissions = true, effort, cwd, } = {}) {
     return {
         permissionMode,
@@ -15,7 +23,7 @@ export function createImpelClaudeProviderOptions({ providerOptions, permissionMo
     };
 }
 export function resolveImpelClaudeModelId({ modelId, defaultModelId = IMPEL_DEFAULT_CLAUDE_MODEL_ID, } = {}) {
-    return modelId ?? process.env.IMPEL_MODEL_ID ?? defaultModelId;
+    return modelId ?? resolveImpelModelId(["IMPEL_MODEL_ID"], defaultModelId);
 }
 export function createImpelCodexProviderOptions({ providerOptions, approvalMode = "never", sandboxMode = "workspace-write", skipGitRepoCheck = true, effort, } = {}) {
     return {
@@ -27,13 +35,11 @@ export function createImpelCodexProviderOptions({ providerOptions, approvalMode 
     };
 }
 export function resolveImpelCodexModelId({ modelId, defaultModelId = IMPEL_DEFAULT_CODEX_MODEL_ID, } = {}) {
-    return modelId ?? process.env.IMPEL_CODEX_MODEL_ID ?? defaultModelId;
+    return (modelId ?? resolveImpelModelId(["IMPEL_CODEX_MODEL_ID"], defaultModelId));
 }
 export function resolveImpelOpenAIResponsesModelId({ modelId, defaultModelId = IMPEL_DEFAULT_OPENAI_RESPONSES_MODEL_ID, } = {}) {
     return (modelId ??
-        process.env.IMPEL_OPENAI_RESPONSES_MODEL_ID ??
-        process.env.IMPEL_CODEX_MODEL_ID ??
-        defaultModelId);
+        resolveImpelModelId(["IMPEL_OPENAI_RESPONSES_MODEL_ID", "IMPEL_CODEX_MODEL_ID"], defaultModelId));
 }
 export function inferClaudeCodeLocalModel(modelId, fallback = "opus") {
     if (/sonnet/i.test(modelId))

@@ -58,6 +58,17 @@ export interface ImpelCodexModelOptions
 export interface ImpelOpenAIResponsesModelOptions
   extends ImpelCodexModelOptions {}
 
+export function resolveImpelModelId(
+  envNames: readonly string[],
+  defaultModelId: string,
+): string {
+  for (const name of envNames) {
+    const value = process.env[name]?.trim();
+    if (value) return value;
+  }
+  return defaultModelId;
+}
+
 export function createImpelClaudeProviderOptions({
   providerOptions,
   permissionMode = "bypassPermissions",
@@ -81,7 +92,7 @@ export function resolveImpelClaudeModelId({
   modelId?: string;
   defaultModelId?: string;
 } = {}): string {
-  return modelId ?? process.env.IMPEL_MODEL_ID ?? defaultModelId;
+  return modelId ?? resolveImpelModelId(["IMPEL_MODEL_ID"], defaultModelId);
 }
 
 export function createImpelCodexProviderOptions({
@@ -107,7 +118,9 @@ export function resolveImpelCodexModelId({
   modelId?: string;
   defaultModelId?: string;
 } = {}): string {
-  return modelId ?? process.env.IMPEL_CODEX_MODEL_ID ?? defaultModelId;
+  return (
+    modelId ?? resolveImpelModelId(["IMPEL_CODEX_MODEL_ID"], defaultModelId)
+  );
 }
 
 export function resolveImpelOpenAIResponsesModelId({
@@ -119,9 +132,10 @@ export function resolveImpelOpenAIResponsesModelId({
 } = {}): string {
   return (
     modelId ??
-    process.env.IMPEL_OPENAI_RESPONSES_MODEL_ID ??
-    process.env.IMPEL_CODEX_MODEL_ID ??
-    defaultModelId
+    resolveImpelModelId(
+      ["IMPEL_OPENAI_RESPONSES_MODEL_ID", "IMPEL_CODEX_MODEL_ID"],
+      defaultModelId,
+    )
   );
 }
 
