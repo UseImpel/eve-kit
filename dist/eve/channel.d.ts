@@ -22,11 +22,19 @@ export interface ImpelPreparedRepo {
     ref: string;
     sha: string;
 }
+export type ImpelWorkspaceLayout = "single-repo-root" | "multi-repo-directory";
+export interface ImpelPlannedRepoCheckout {
+    repo: string;
+    path: string;
+    role: "primary" | "additional";
+}
 export interface ImpelEveChannelState {
     runContext: ImpelEveRunContext | null;
     workspace: {
         prepared: boolean;
         sandboxId: string | null;
+        key: string | null;
+        layout: ImpelWorkspaceLayout | null;
         repos: ImpelPreparedRepo[];
         error: string | null;
     };
@@ -43,6 +51,7 @@ export declare function createImpelEveChannelState(runContext: ImpelEveRunContex
 export declare function extractImpelEveRunContextFromRequest(request: Request): Promise<ImpelEveRunContext | null>;
 export declare function normalizeImpelEveRunContext(value: unknown): ImpelEveRunContext | null;
 export declare function normalizeClientContextMessages(value: unknown): string[] | undefined;
+export declare function planImpelEveRepoCheckouts(repoNames: readonly string[]): ImpelPlannedRepoCheckout[];
 export declare function resolveVercelConnectGitHubConnectorUid(value?: string | undefined): string;
 export declare function createVercelConnectGitHubTokenParams(runContext: ImpelEveRunContext): Record<string, unknown>;
 //# sourceMappingURL=channel.d.ts.map

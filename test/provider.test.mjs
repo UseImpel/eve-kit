@@ -22,6 +22,7 @@ import {
   defaultImpelEveChannel,
   extractImpelEveRunContextFromRequest,
   normalizeImpelEveRunContext,
+  planImpelEveRepoCheckouts,
   resolveVercelConnectGitHubConnectorUid,
 } from "../dist/eve/channel.js";
 
@@ -265,6 +266,55 @@ test("default Impel Eve channel is stateful for workspace preparation", () => {
   assert.equal(channel.routes.length, 3);
   assert.equal(channel.adapter.kind, "defineChannel");
   assert.deepEqual(channel.adapter.state, createImpelEveChannelState(null));
+});
+
+test("Impel Eve repo checkout planning keeps single-repo runs at workspace root", () => {
+  assert.deepEqual(planImpelEveRepoCheckouts(["UseImpel/next"]), [
+    {
+      repo: "UseImpel/next",
+      path: "/workspace",
+      role: "primary",
+    },
+  ]);
+});
+
+test("Impel Eve repo checkout planning gives every multi-repo run an explicit directory", () => {
+  assert.deepEqual(
+    planImpelEveRepoCheckouts([
+      "UseImpel/impel-inference",
+      "UseImpel/impel-ingestion",
+    ]),
+    [
+      {
+        repo: "UseImpel/impel-inference",
+        path: "/workspace/impel-inference",
+        role: "primary",
+      },
+      {
+        repo: "UseImpel/impel-ingestion",
+        path: "/workspace/impel-ingestion",
+        role: "additional",
+      },
+    ],
+  );
+});
+
+test("Impel Eve repo checkout planning disambiguates duplicate short names", () => {
+  assert.deepEqual(
+    planImpelEveRepoCheckouts(["UseImpel/web", "Acme/web"]),
+    [
+      {
+        repo: "UseImpel/web",
+        path: "/workspace/UseImpel__web",
+        role: "primary",
+      },
+      {
+        repo: "Acme/web",
+        path: "/workspace/Acme__web",
+        role: "additional",
+      },
+    ],
+  );
 });
 
 test("default Impel Eve session route seeds channel state from clientContext", async () => {

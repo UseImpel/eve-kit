@@ -45,11 +45,21 @@ export interface ImpelPreparedRepo {
   sha: string;
 }
 
+export type ImpelWorkspaceLayout = "single-repo-root" | "multi-repo-directory";
+
+export interface ImpelPlannedRepoCheckout {
+  repo: string;
+  path: string;
+  role: "primary" | "additional";
+}
+
 export interface ImpelEveChannelState {
   runContext: ImpelEveRunContext | null;
   workspace: {
     prepared: boolean;
     sandboxId: string | null;
+    key: string | null;
+    layout: ImpelWorkspaceLayout | null;
     repos: ImpelPreparedRepo[];
     error: string | null;
   };
@@ -75,6 +85,15 @@ interface GitHubRepoRef {
   owner: string;
   repo: string;
   fullName: string;
+}
+
+interface WorkspaceRepoCheckout extends ImpelPlannedRepoCheckout {
+  repoRef: GitHubRepoRef;
+}
+
+interface WorkspaceCheckoutPlan {
+  layout: ImpelWorkspaceLayout;
+  repos: WorkspaceRepoCheckout[];
 }
 
 interface GitHubInstallationToken {
@@ -160,6 +179,8 @@ export function createImpelEveChannelState(
     workspace: {
       prepared: false,
       sandboxId: null,
+      key: null,
+      layout: null,
       repos: [],
       error: null,
     },
@@ -249,10 +270,16 @@ async function prepareImpelEveWorkspace(
   if (!runContext?.repos?.length) return;
 
   const sandbox = await options.getSandbox();
+  const checkoutPlan = createWorkspaceCheckoutPlan(runContext.repos);
+  const workspaceKey = createWorkspaceKey(runContext, {
+    checkoutDepth: options.checkoutDepth,
+    layout: checkoutPlan.layout,
+    repos: checkoutPlan.repos,
+  });
   if (
     state.workspace.prepared &&
     state.workspace.sandboxId === sandbox.id &&
-    state.workspace.repos.length === runContext.repos.length
+    state.workspace.key === workspaceKey
   ) {
     return;
   }
@@ -261,22 +288,29 @@ async function prepareImpelEveWorkspace(
     const token = await resolveGitHubAccessToken(runContext);
     await sandbox.setNetworkPolicy(buildGitHubBrokerNetworkPolicy(token));
     await configureGitHubCliAuthMarker(sandbox);
+    await prepareWorkspaceRoot(sandbox, checkoutPlan.layout);
 
     const prepared: ImpelPreparedRepo[] = [];
-    for (const [index, repoName] of runContext.repos.entries()) {
-      const repo = parseGitHubRepo(repoName);
-      const checkout = await checkoutGitHubRepository(sandbox, repo, {
+    for (const planned of checkoutPlan.repos) {
+      const checkout = await checkoutGitHubRepository(sandbox, planned.repoRef, {
         depth: options.checkoutDepth,
-        path: checkoutPathForRepo(repo, index),
+        path: planned.path,
         ref: runContext.branch ?? "HEAD",
       });
       prepared.push(checkout);
     }
 
-    await writeWorkspaceMetadata(sandbox, runContext, prepared);
+    await writeWorkspaceMetadata(
+      sandbox,
+      runContext,
+      prepared,
+      checkoutPlan.layout,
+    );
     state.workspace = {
       prepared: true,
       sandboxId: sandbox.id,
+      key: workspaceKey,
+      layout: checkoutPlan.layout,
       repos: prepared,
       error: null,
     };
@@ -285,6 +319,8 @@ async function prepareImpelEveWorkspace(
     state.workspace = {
       prepared: false,
       sandboxId: sandbox.id,
+      key: null,
+      layout: null,
       repos: [],
       error: message,
     };
@@ -637,6 +673,99 @@ function assertJsonSerializable(value: Record<string, unknown>): Record<string, 
   return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 }
 
+export function planImpelEveRepoCheckouts(
+  repoNames: readonly string[],
+): ImpelPlannedRepoCheckout[] {
+  return createWorkspaceCheckoutPlan(repoNames).repos.map((repo) => ({
+    repo: repo.repo,
+    path: repo.path,
+    role: repo.role,
+  }));
+}
+
+function createWorkspaceCheckoutPlan(
+  repoNames: readonly string[],
+): WorkspaceCheckoutPlan {
+  const repoRefs = repoNames.map(parseGitHubRepo);
+  const layout: ImpelWorkspaceLayout =
+    repoRefs.length <= 1 ? "single-repo-root" : "multi-repo-directory";
+  const repoNameCounts = countRepoNames(repoRefs);
+
+  return {
+    layout,
+    repos: repoRefs.map((repoRef, index) => ({
+      repo: repoRef.fullName,
+      repoRef,
+      path:
+        layout === "single-repo-root"
+          ? "/workspace"
+          : `/workspace/${checkoutDirectoryName(repoRef, repoNameCounts)}`,
+      role: index === 0 ? "primary" : "additional",
+    })),
+  };
+}
+
+function countRepoNames(repoRefs: readonly GitHubRepoRef[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const repo of repoRefs) {
+    counts.set(repo.repo, (counts.get(repo.repo) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function checkoutDirectoryName(
+  repo: GitHubRepoRef,
+  repoNameCounts: ReadonlyMap<string, number>,
+): string {
+  if ((repoNameCounts.get(repo.repo) ?? 0) === 1) {
+    return safePathSegment(repo.repo);
+  }
+  return safePathSegment(repo.fullName);
+}
+
+function createWorkspaceKey(
+  runContext: ImpelEveRunContext,
+  plan: {
+    checkoutDepth: number;
+    layout: ImpelWorkspaceLayout;
+    repos: readonly WorkspaceRepoCheckout[];
+  },
+): string {
+  return JSON.stringify({
+    branch: runContext.branch ?? "HEAD",
+    checkoutDepth: plan.checkoutDepth,
+    layout: plan.layout,
+    repos: plan.repos.map((repo) => ({
+      path: repo.path,
+      repo: repo.repo,
+    })),
+  });
+}
+
+async function prepareWorkspaceRoot(
+  sandbox: SandboxSession,
+  layout: ImpelWorkspaceLayout,
+): Promise<void> {
+  if (layout === "single-repo-root") {
+    await runSandboxCommand(
+      sandbox,
+      "prepare single-repo workspace root",
+      "mkdir -p /workspace",
+    );
+    return;
+  }
+
+  await runSandboxCommand(
+    sandbox,
+    "prepare multi-repo workspace root",
+    [
+      "mkdir -p /workspace",
+      "rm -rf /workspace/.git /workspace/repos",
+      "mkdir -p /workspace/.impel",
+    ].join("\n"),
+  );
+}
+
 async function checkoutGitHubRepository(
   sandbox: SandboxSession,
   repo: GitHubRepoRef,
@@ -722,9 +851,12 @@ async function writeWorkspaceMetadata(
   sandbox: SandboxSession,
   runContext: ImpelEveRunContext,
   repos: ImpelPreparedRepo[],
+  layout: ImpelWorkspaceLayout,
 ): Promise<void> {
   const metadata = {
     preparedAt: new Date().toISOString(),
+    layout,
+    workspaceRoot: "/workspace",
     orgId: runContext.orgId,
     runId: runContext.runId,
     traceId: runContext.traceId,
@@ -735,6 +867,10 @@ async function writeWorkspaceMetadata(
     "# Impel Eve Workspace",
     "",
     "This workspace was prepared from the Impel Eve client context.",
+    "",
+    layout === "multi-repo-directory"
+      ? "/workspace is a coordination directory, not a git checkout. Run git commands inside one of the repo directories below."
+      : "/workspace is the attached git checkout.",
     "",
     ...repos.map((repo, index) =>
       `- ${index === 0 ? "Primary" : "Additional"} repo ${repo.repo} at ${repo.path} (${repo.sha})`,
@@ -990,11 +1126,6 @@ function parseGitHubRepo(value: string): GitHubRepoRef {
     throw new Error(`Invalid GitHub repository name "${value}". Expected owner/repo.`);
   }
   return { owner, repo, fullName: `${owner}/${repo}` };
-}
-
-function checkoutPathForRepo(repo: GitHubRepoRef, index: number): string {
-  if (index === 0) return "/workspace";
-  return `/workspace/repos/${safePathSegment(repo.fullName)}`;
 }
 
 function safePathSegment(value: string): string {
