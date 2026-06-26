@@ -16,6 +16,12 @@ import {
   IMPEL_CLAUDE_BRIDGE_READ_ONLY_TOOLS,
   impelClaudeBridgeConnection,
 } from "../dist/eve/connections/claude-bridge.js";
+import {
+  createImpelEveChannelState,
+  defaultImpelEveChannel,
+  extractImpelEveRunContextFromRequest,
+  normalizeImpelEveRunContext,
+} from "../dist/eve/channel.js";
 
 function sse(parts) {
   return new ReadableStream({
@@ -189,6 +195,74 @@ test("keeps Claude Bridge execution opt-in", () => {
   assert.ok(
     executeConnection.tools?.allow.includes(IMPEL_CLAUDE_BRIDGE_EXECUTE_TOOL),
   );
+});
+
+test("normalizes Impel Eve run context from clientContext", () => {
+  assert.deepEqual(
+    normalizeImpelEveRunContext({
+      orgId: "impel",
+      repos: [" UseImpel/next ", "UseImpel/next", "", 42],
+      branch: "main",
+      installationId: "12345",
+      runId: "run_123",
+      traceId: "trace_123",
+      agent: { agentId: "platform-engineer" },
+      btParent: "00-parent",
+    }),
+    {
+      orgId: "impel",
+      repos: ["UseImpel/next"],
+      branch: "main",
+      installationId: "12345",
+      runId: "run_123",
+      traceId: "trace_123",
+      agent: { agentId: "platform-engineer" },
+      btParent: "00-parent",
+    },
+  );
+
+  assert.equal(normalizeImpelEveRunContext(null), null);
+});
+
+test("extracts Impel Eve run context from Eve session requests without consuming the body", async () => {
+  const request = new Request("https://agent.example/eve/v1/session", {
+    method: "POST",
+    body: JSON.stringify({
+      message: "count commits",
+      clientContext: {
+        orgId: "impel",
+        repos: ["UseImpel/next"],
+        installationId: 12345,
+      },
+    }),
+  });
+
+  assert.deepEqual(await extractImpelEveRunContextFromRequest(request), {
+    orgId: "impel",
+    repos: ["UseImpel/next"],
+    installationId: 12345,
+  });
+
+  assert.equal(await request.text(), JSON.stringify({
+    message: "count commits",
+    clientContext: {
+      orgId: "impel",
+      repos: ["UseImpel/next"],
+      installationId: 12345,
+    },
+  }));
+});
+
+test("default Impel Eve channel is stateful for workspace preparation", () => {
+  const channel = defaultImpelEveChannel({
+    basicUser: "user",
+    basicPassword: "pass",
+    prepareAttachedRepos: true,
+  });
+
+  assert.equal(channel.routes.length, 3);
+  assert.equal(channel.adapter.kind, "defineChannel");
+  assert.deepEqual(channel.adapter.state, createImpelEveChannelState(null));
 });
 
 test("impelInference uses hosted model stream by default", async () => {
