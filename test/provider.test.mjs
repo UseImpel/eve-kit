@@ -267,6 +267,69 @@ test("default Impel Eve channel is stateful for workspace preparation", () => {
   assert.deepEqual(channel.adapter.state, createImpelEveChannelState(null));
 });
 
+test("default Impel Eve session route seeds channel state from clientContext", async () => {
+  const channel = defaultImpelEveChannel({
+    basicUser: "user",
+    basicPassword: "pass",
+    prepareAttachedRepos: true,
+  });
+  const route = channel.routes.find(
+    (candidate) =>
+      candidate.method === "POST" && candidate.path === "/eve/v1/session",
+  );
+  assert.ok(route);
+
+  const sent = [];
+  const response = await route.handler(
+    new Request("https://agent.example/eve/v1/session", {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${Buffer.from("user:pass").toString("base64")}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        message: "count commits",
+        clientContext: {
+          orgId: "impel",
+          repos: ["UseImpel/next"],
+          branch: "main",
+        },
+      }),
+    }),
+    {
+      async send(input, options) {
+        sent.push({ input, options });
+        return {
+          continuationToken: "eve:session-token",
+          id: "ses_123",
+        };
+      },
+      getSession() {
+        throw new Error("not used");
+      },
+      params: {},
+      receive() {
+        throw new Error("not used");
+      },
+      requestIp: null,
+      waitUntil() {},
+    },
+  );
+
+  assert.equal(response.status, 202);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].options.state.runContext, {
+    orgId: "impel",
+    repos: ["UseImpel/next"],
+    branch: "main",
+  });
+  assert.equal(sent[0].options.state.workspace.prepared, false);
+  assert.match(sent[0].options.continuationToken, /^eve:/);
+  assert.deepEqual(sent[0].input.context, [
+    'Client context:\n{"orgId":"impel","repos":["UseImpel/next"],"branch":"main"}',
+  ]);
+});
+
 test("Vercel Connect GitHub token params support the connector default installation", () => {
   assert.equal(
     resolveVercelConnectGitHubConnectorUid(undefined),

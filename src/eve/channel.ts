@@ -1,19 +1,23 @@
 import { createSign } from "node:crypto";
 import {
   defineChannel,
+  GET,
+  POST,
   type Channel,
-  type RouteDefinition,
   type RouteHandlerArgs,
-  type SendFn,
+  type SendOptions,
+  type SendPayload,
 } from "eve/channels";
-import { eveChannel } from "eve/channels/eve";
 import {
   httpBasic,
   localDev,
   placeholderAuth,
+  routeAuth,
   vercelOidc,
+  type AuthFn,
 } from "eve/channels/auth";
 import type { SandboxNetworkPolicy, SandboxSession } from "eve/sandbox";
+import type { UserContent } from "ai";
 
 export interface DefaultImpelEveChannelOptions {
   basicUser?: string;
@@ -87,6 +91,8 @@ type VercelConnectModule = {
 };
 
 const DEFAULT_GITHUB_CONNECTOR_UID = "github/useimpel-github";
+const EVE_SESSION_ID_HEADER = "x-eve-session-id";
+const EVE_MESSAGE_STREAM_CONTENT_TYPE = "application/x-ndjson; charset=utf-8";
 const optionalImport = new Function(
   "specifier",
   "return import(specifier)",
@@ -105,14 +111,12 @@ export function defaultImpelEveChannel({
       ? [httpBasic({ username: basicUser, password: basicPassword })]
       : [];
 
-  const base = eveChannel({
-    auth: [
-      localDev(),
-      vercelOidc(),
-      ...basic,
-      ...(includePlaceholderAuth ? [placeholderAuth()] : []),
-    ],
-  });
+  const auth = [
+    localDev(),
+    vercelOidc(),
+    ...basic,
+    ...(includePlaceholderAuth ? [placeholderAuth()] : []),
+  ];
 
   return defineChannel<
     ImpelEveChannelState,
@@ -139,7 +143,7 @@ export function defaultImpelEveChannel({
         workspacePrepared: state.workspace.prepared,
       };
     },
-    routes: base.routes.map((route) => wrapEveRouteWithImpelState(route)),
+    routes: createImpelEveRoutes(auth),
     events: {
       async "turn.started"(_event, channel, ctx) {
         if (!prepareAttachedRepos) return;
@@ -210,6 +214,34 @@ export function normalizeImpelEveRunContext(
   });
 }
 
+export function normalizeClientContextMessages(
+  value: unknown,
+): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string") {
+    return value.length > 0 ? [toClientContextMessage(value)] : undefined;
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return undefined;
+    if (!value.every((item) => typeof item === "string" && item.length > 0)) {
+      throw new Error(
+        "Expected 'clientContext' array entries to be non-empty strings.",
+      );
+    }
+    return value.map((item) => toClientContextMessage(item));
+  }
+  if (!isRecord(value)) {
+    throw new Error(
+      "Expected 'clientContext' to be a string, string array, or JSON object.",
+    );
+  }
+  return [toClientContextMessage(JSON.stringify(assertJsonSerializable(value)))];
+}
+
+function toClientContextMessage(value: string): string {
+  return `Client context:\n${value}`;
+}
+
 async function prepareImpelEveWorkspace(
   state: ImpelEveChannelState,
   options: {
@@ -264,36 +296,349 @@ async function prepareImpelEveWorkspace(
   }
 }
 
-function wrapEveRouteWithImpelState(
-  route: RouteDefinition<undefined>,
-): RouteDefinition<ImpelEveChannelState> {
-  if (route.transport === "websocket") {
-    return route as unknown as RouteDefinition<ImpelEveChannelState>;
+function createImpelEveRoutes(
+  auth: readonly AuthFn<Request>[],
+) {
+  return [
+    POST<ImpelEveChannelState>("/eve/v1/session", async (request, args) => {
+      const authorized = await routeAuth(request, auth);
+      if (authorized instanceof Response) return authorized;
+
+      const body = await parseJsonBody(request);
+      if (body instanceof Response) return body;
+
+      const parsed = parseCreateSessionBody(body);
+      if (parsed instanceof Response) return parsed;
+
+      const state = createImpelEveChannelState(
+        normalizeImpelEveRunContext(parsed.clientContext),
+      );
+      const session = await args.send(
+        createSendPayload(parsed),
+        withState(
+          {
+            auth: authorized,
+            continuationToken: `eve:${crypto.randomUUID()}`,
+            mode: parsed.mode,
+          },
+          state,
+        ),
+      );
+
+      return Response.json(
+        {
+          continuationToken: session.continuationToken,
+          ok: true,
+          sessionId: session.id,
+        },
+        {
+          headers: {
+            "cache-control": "no-store",
+            [EVE_SESSION_ID_HEADER]: session.id,
+          },
+          status: 202,
+        },
+      );
+    }),
+    POST<ImpelEveChannelState>(
+      "/eve/v1/session/:sessionId",
+      async (request, args) => {
+        const authorized = await routeAuth(request, auth);
+        if (authorized instanceof Response) return authorized;
+
+        const sessionId = args.params.sessionId;
+        if (!sessionId) {
+          return jsonError("Missing session id.", 400);
+        }
+        try {
+          args.getSession(sessionId);
+        } catch {
+          return jsonError("Session not found.", 404);
+        }
+
+        const body = await parseJsonBody(request);
+        if (body instanceof Response) return body;
+
+        const parsed = parseContinueSessionBody(body);
+        if (parsed instanceof Response) return parsed;
+
+        const state = createImpelEveChannelState(
+          normalizeImpelEveRunContext(parsed.clientContext),
+        );
+        const session = await args.send(
+          createSendPayload(parsed),
+          withState(
+            {
+              auth: authorized,
+              continuationToken: parsed.continuationToken,
+            },
+            state,
+          ),
+        );
+
+        return Response.json(
+          {
+            ok: true,
+            sessionId: session.id,
+          },
+          {
+            headers: {
+              "cache-control": "no-store",
+              [EVE_SESSION_ID_HEADER]: session.id,
+            },
+            status: 200,
+          },
+        );
+      },
+    ),
+    GET<ImpelEveChannelState>(
+      "/eve/v1/session/:sessionId/stream",
+      async (request, args) => {
+        const authorized = await routeAuth(request, auth);
+        if (authorized instanceof Response) return authorized;
+
+        const sessionId = args.params.sessionId;
+        if (!sessionId) {
+          return jsonError("Missing session id.", 400);
+        }
+
+        const startIndex = parseStartIndex(request);
+        if (startIndex instanceof Response) return startIndex;
+
+        try {
+          const stream = await args
+            .getSession(sessionId)
+            .getEventStream({ startIndex });
+          return new Response(serializeAsNdjson(stream), {
+            headers: {
+              "cache-control": "no-store, no-transform",
+              "content-type": EVE_MESSAGE_STREAM_CONTENT_TYPE,
+              "x-accel-buffering": "no",
+              [EVE_SESSION_ID_HEADER]: sessionId,
+            },
+          });
+        } catch {
+          return jsonError("Session not found.", 404);
+        }
+      },
+    ),
+  ];
+}
+
+type CreateSessionBody = {
+  message: string | UserContent;
+  clientContext?: unknown;
+  context?: readonly string[];
+  mode?: "conversation" | "task";
+  outputSchema?: Record<string, unknown>;
+};
+
+type ContinueSessionBody = {
+  continuationToken: string;
+  message?: string | UserContent;
+  inputResponses?: readonly unknown[];
+  clientContext?: unknown;
+  context?: readonly string[];
+  outputSchema?: Record<string, unknown>;
+};
+
+async function parseJsonBody(request: Request): Promise<Record<string, unknown> | Response> {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonError("Invalid JSON body.", 400);
+  }
+  if (!isRecord(body)) return jsonError("Expected a JSON object.", 400);
+  return body;
+}
+
+function parseCreateSessionBody(
+  body: Record<string, unknown>,
+): CreateSessionBody | Response {
+  const message = parseMessageField(body.message);
+  if (message instanceof Response) return message;
+  if (message === undefined) {
+    return jsonError("Missing or empty 'message' field.", 400);
   }
 
+  const context = parseClientContextField(body.clientContext);
+  if (context instanceof Response) return context;
+
+  const mode = parseModeField(body.mode);
+  if (mode instanceof Response) return mode;
+
+  const outputSchema = parseOutputSchemaField(body.outputSchema);
+  if (outputSchema instanceof Response) return outputSchema;
+
+  return stripUndefined({
+    clientContext: body.clientContext,
+    context,
+    message,
+    mode,
+    outputSchema,
+  });
+}
+
+function parseContinueSessionBody(
+  body: Record<string, unknown>,
+): ContinueSessionBody | Response {
+  const continuationToken =
+    typeof body.continuationToken === "string" && body.continuationToken.length > 0
+      ? body.continuationToken
+      : undefined;
+  if (!continuationToken) {
+    return jsonError("Missing or empty 'continuationToken' field.", 400);
+  }
+
+  const message = parseMessageField(body.message);
+  if (message instanceof Response) return message;
+
+  const inputResponses = parseInputResponsesField(body.inputResponses);
+  if (inputResponses instanceof Response) return inputResponses;
+
+  if (message === undefined && inputResponses === undefined) {
+    return jsonError(
+      "Expected a non-empty 'message', a non-empty 'inputResponses' array, or both.",
+      400,
+    );
+  }
+
+  const context = parseClientContextField(body.clientContext);
+  if (context instanceof Response) return context;
+
+  const outputSchema = parseOutputSchemaField(body.outputSchema);
+  if (outputSchema instanceof Response) return outputSchema;
+
+  return stripUndefined({
+    clientContext: body.clientContext,
+    context,
+    continuationToken,
+    inputResponses,
+    message,
+    outputSchema,
+  });
+}
+
+function parseMessageField(value: unknown): string | UserContent | undefined | Response {
+  if (value === undefined) return undefined;
+  if (typeof value === "string") return value.length > 0 ? value : undefined;
+  if (!Array.isArray(value)) {
+    return jsonError(
+      "Expected 'message' to be a string or an array of text/file parts.",
+      400,
+    );
+  }
+  if (value.length === 0) return undefined;
+  return value as UserContent;
+}
+
+function parseClientContextField(value: unknown): string[] | undefined | Response {
+  try {
+    return normalizeClientContextMessages(value);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : String(error), 400);
+  }
+}
+
+function parseInputResponsesField(
+  value: unknown,
+): readonly unknown[] | undefined | Response {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) {
+    return jsonError("Expected 'inputResponses' to be a non-empty array.", 400);
+  }
+  return value;
+}
+
+function parseModeField(value: unknown): "conversation" | "task" | undefined | Response {
+  if (value === undefined) return undefined;
+  if (value === "conversation" || value === "task") return value;
+  return jsonError("Expected 'mode' to be either 'conversation' or 'task'.", 400);
+}
+
+function parseOutputSchemaField(
+  value: unknown,
+): Record<string, unknown> | undefined | Response {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    return jsonError("Expected 'outputSchema' to be a JSON object.", 400);
+  }
+  try {
+    return assertJsonSerializable(value);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : String(error), 400);
+  }
+}
+
+function createSendPayload(input: {
+  message?: string | UserContent;
+  inputResponses?: readonly unknown[];
+  context?: readonly string[];
+  outputSchema?: Record<string, unknown>;
+}): string | UserContent | SendPayload {
+  if (
+    input.message !== undefined &&
+    input.context === undefined &&
+    input.outputSchema === undefined &&
+    input.inputResponses === undefined
+  ) {
+    return input.message;
+  }
+
+  return stripUndefined({
+    context: input.context,
+    inputResponses: input.inputResponses,
+    message: input.message,
+    outputSchema: input.outputSchema,
+  }) as SendPayload;
+}
+
+function withState(
+  options: Omit<SendOptions<ImpelEveChannelState>, "state">,
+  state: ImpelEveChannelState,
+): SendOptions<ImpelEveChannelState> {
   return {
-    ...route,
-    async handler(request, args) {
-      const runContext = await extractImpelEveRunContextFromRequest(request);
-      const state = createImpelEveChannelState(runContext);
-      const send = buildStatefulSend(args, state);
-      return route.handler(request, {
-        ...args,
-        send,
-      } as unknown as RouteHandlerArgs<undefined>);
-    },
+    ...options,
+    state,
   };
 }
 
-function buildStatefulSend(
-  args: RouteHandlerArgs<ImpelEveChannelState>,
-  state: ImpelEveChannelState,
-): SendFn<undefined> {
-  return async (input, options) =>
-    args.send(input, {
-      ...options,
-      state,
-    });
+function parseStartIndex(request: Request): number | undefined | Response {
+  const value = new URL(request.url).searchParams.get("startIndex");
+  if (value === null) return undefined;
+  const startIndex = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(startIndex) || startIndex < 0) {
+    return jsonError("Expected startIndex to be a non-negative integer.", 400);
+  }
+  return startIndex;
+}
+
+function serializeAsNdjson(
+  stream: ReadableStream<unknown>,
+): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return stream.pipeThrough(
+    new TransformStream({
+      transform(event, controller) {
+        controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+      },
+    }),
+  );
+}
+
+function jsonError(error: string, status: number): Response {
+  return Response.json(
+    {
+      error,
+      ok: false,
+    },
+    { status },
+  );
+}
+
+function assertJsonSerializable(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 }
 
 async function checkoutGitHubRepository(
