@@ -698,6 +698,8 @@ function safeCallOptions(options: LanguageModelV3CallOptions) {
     stopSequences,
     seed,
     responseFormat,
+    tools,
+    toolChoice,
   } = options;
   return {
     temperature,
@@ -709,6 +711,8 @@ function safeCallOptions(options: LanguageModelV3CallOptions) {
     stopSequences,
     seed,
     responseFormat,
+    tools,
+    toolChoice,
   };
 }
 

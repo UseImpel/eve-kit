@@ -45,8 +45,8 @@ function promptWithClientContext(context) {
   ];
 }
 
-async function readStreamParts(model) {
-  const { stream } = await model.doStream({ prompt: [] });
+async function readStreamParts(model, options = { prompt: [] }) {
+  const { stream } = await model.doStream(options);
   const reader = stream.getReader();
   const parts = [];
   try {
@@ -111,6 +111,213 @@ test("impelInference uses hosted model stream by default", async () => {
     assert.equal(result.content[0].type, "text");
     assert.equal(result.content[0].text, "hosted");
     assert.equal(requests.length, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("forwards Eve tool call options to hosted model stream", async () => {
+  const requests = [];
+  const previousFetch = globalThis.fetch;
+  const tools = [
+    {
+      type: "function",
+      name: "render_ui",
+      description: "Render a UI payload.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+        },
+        required: ["title"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      name: "researcher",
+      description: "Delegate to the researcher subagent.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          message: { type: "string" },
+          outputSchema: { type: "object" },
+        },
+        required: ["message"],
+        additionalProperties: false,
+      },
+    },
+  ];
+
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+
+    assert.equal(String(url), "https://infer.example/v1/model/stream");
+    const body = JSON.parse(String(init.body));
+    assert.deepEqual(body.callOptions.tools, tools);
+    assert.deepEqual(body.callOptions.toolChoice, {
+      type: "tool",
+      toolName: "render_ui",
+    });
+    assert.equal("abortSignal" in body.callOptions, false);
+    return new Response(
+      sse([
+        { type: "stream-start", warnings: [] },
+        { type: "text-start", id: "txt" },
+        { type: "text-delta", id: "txt", delta: "tool-ready" },
+        { type: "text-end", id: "txt" },
+        finishPart(),
+        "[DONE]",
+      ]),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  };
+
+  try {
+    const model = impelInference("claude-opus-4-8", {
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_default",
+    });
+
+    const parts = await readStreamParts(model, {
+      prompt: [],
+      tools,
+      toolChoice: { type: "tool", toolName: "render_ui" },
+      abortSignal: new AbortController().signal,
+    });
+
+    assert.equal(
+      parts.find((part) => part.type === "text-delta")?.delta,
+      "tool-ready",
+    );
+    assert.equal(requests.length, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("model-stream transport forwards tools and toolChoice in callOptions", async () => {
+  const requests = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+
+    return new Response(
+      sse([{ type: "stream-start", warnings: [] }, finishPart(), "[DONE]"]),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  };
+
+  const tool = {
+    type: "function",
+    name: "echo",
+    description: "Echo a value",
+    inputSchema: {
+      type: "object",
+      properties: { value: { type: "string" } },
+      required: ["value"],
+      additionalProperties: false,
+    },
+  };
+  const toolChoice = { type: "tool", toolName: "echo" };
+
+  try {
+    const model = impelInference("claude-opus-4-8", {
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_tools",
+    });
+
+    const { stream } = await model.doStream({
+      prompt: [],
+      tools: [tool],
+      toolChoice,
+      temperature: 0.2,
+    });
+    await stream.cancel();
+
+    assert.equal(requests.length, 1);
+    const body = JSON.parse(String(requests[0].init.body));
+    assert.deepEqual(body.callOptions.tools, [tool]);
+    assert.deepEqual(body.callOptions.toolChoice, toolChoice);
+    assert.equal(body.callOptions.temperature, 0.2);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("model-stream transport does not serialize abortSignal or per-call headers", async () => {
+  const requests = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+
+    return new Response(
+      sse([{ type: "stream-start", warnings: [] }, finishPart(), "[DONE]"]),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  };
+
+  try {
+    const model = impelInference("claude-opus-4-8", {
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_tools",
+    });
+
+    const { stream } = await model.doStream({
+      prompt: [],
+      temperature: 0.4,
+      abortSignal: AbortSignal.timeout(1_000),
+      headers: { "x-should-not-forward": "1" },
+    });
+    await stream.cancel();
+
+    const body = JSON.parse(String(requests[0].init.body));
+    assert.equal(body.callOptions.temperature, 0.4);
+    assert.equal("abortSignal" in body.callOptions, false);
+    assert.equal("headers" in body.callOptions, false);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("doGenerate surfaces hosted tool-call stream parts", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      sse([
+        { type: "stream-start", warnings: [] },
+        {
+          type: "tool-call",
+          toolCallId: "call_1",
+          toolName: "echo",
+          input: { value: "ok" },
+        },
+        finishPart(),
+        "[DONE]",
+      ]),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+
+  try {
+    const model = impelInference("claude-opus-4-8", {
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_tools",
+    });
+
+    const result = await model.doGenerate({ prompt: [] });
+
+    assert.deepEqual(result.content, [
+      {
+        type: "tool-call",
+        toolCallId: "call_1",
+        toolName: "echo",
+        input: { value: "ok" },
+      },
+    ]);
   } finally {
     globalThis.fetch = previousFetch;
   }

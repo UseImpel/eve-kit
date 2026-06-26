@@ -454,7 +454,7 @@ function envRunContext() {
     };
 }
 function safeCallOptions(options) {
-    const { temperature, maxOutputTokens, topP, topK, presencePenalty, frequencyPenalty, stopSequences, seed, responseFormat, } = options;
+    const { temperature, maxOutputTokens, topP, topK, presencePenalty, frequencyPenalty, stopSequences, seed, responseFormat, tools, toolChoice, } = options;
     return {
         temperature,
         maxOutputTokens,
@@ -465,6 +465,8 @@ function safeCallOptions(options) {
         stopSequences,
         seed,
         responseFormat,
+        tools,
+        toolChoice,
     };
 }
 function requireConfigured(name, value) {
