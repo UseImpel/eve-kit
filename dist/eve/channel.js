@@ -543,12 +543,31 @@ export function resolveVercelConnectGitHubConnectorUid(value = process.env.VERCE
     return readString(value) ?? DEFAULT_GITHUB_CONNECTOR_UID;
 }
 export function createVercelConnectGitHubTokenParams(runContext) {
+    const repositoryNames = githubRepositoryNamesFromRunContext(runContext);
     return stripUndefined({
         subject: { type: "app" },
         installationId: runContext.installationId === undefined
             ? undefined
             : String(runContext.installationId),
+        authorizationDetails: repositoryNames.length > 0
+            ? [
+                {
+                    type: "github_app_installation",
+                    repositories: repositoryNames.length === 1
+                        ? repositoryNames[0]
+                        : repositoryNames,
+                    permissions: "contents:read",
+                },
+            ]
+            : undefined,
     });
+}
+function githubRepositoryNamesFromRunContext(runContext) {
+    const names = new Set();
+    for (const repoName of runContext.repos ?? []) {
+        names.add(parseGitHubRepo(repoName).repo);
+    }
+    return Array.from(names);
 }
 const githubInstallationTokenCache = new Map();
 async function createGitHubInstallationToken(installationId) {

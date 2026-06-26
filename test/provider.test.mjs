@@ -355,6 +355,24 @@ test("Vercel Connect GitHub token params support the connector default installat
       installationId: "12345",
     },
   );
+
+  assert.deepEqual(
+    createVercelConnectGitHubTokenParams({
+      installationId: 12345,
+      repos: ["UseImpel/next", "UseImpel/next", "UseImpel/impel-agents"],
+    }),
+    {
+      subject: { type: "app" },
+      installationId: "12345",
+      authorizationDetails: [
+        {
+          type: "github_app_installation",
+          repositories: ["next", "impel-agents"],
+          permissions: "contents:read",
+        },
+      ],
+    },
+  );
 });
 
 test("impelInference uses hosted model stream by default", async () => {
