@@ -272,7 +272,7 @@ async function resolveVercelConnectGitHubToken(runContext) {
         return null;
     }
     try {
-        const response = await connect.getTokenResponse(process.env.VERCEL_GITHUB_CONNECTOR_UID ?? DEFAULT_GITHUB_CONNECTOR_UID, createVercelConnectGitHubTokenParams(runContext));
+        const response = await connect.getTokenResponse(resolveVercelConnectGitHubConnectorUid(), createVercelConnectGitHubTokenParams(runContext));
         return typeof response.token === "string" ? response.token : null;
     }
     catch (error) {
@@ -281,6 +281,9 @@ async function resolveVercelConnectGitHubToken(runContext) {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`Vercel Connect could not mint a GitHub installation token for Eve workspace checkout. ${message}`);
     }
+}
+export function resolveVercelConnectGitHubConnectorUid(value = process.env.VERCEL_GITHUB_CONNECTOR_UID) {
+    return readString(value) ?? DEFAULT_GITHUB_CONNECTOR_UID;
 }
 export function createVercelConnectGitHubTokenParams(runContext) {
     return stripUndefined({

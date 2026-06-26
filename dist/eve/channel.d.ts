@@ -42,5 +42,6 @@ export declare function defaultImpelEveChannel({ basicUser, basicPassword, inclu
 export declare function createImpelEveChannelState(runContext: ImpelEveRunContext | null): ImpelEveChannelState;
 export declare function extractImpelEveRunContextFromRequest(request: Request): Promise<ImpelEveRunContext | null>;
 export declare function normalizeImpelEveRunContext(value: unknown): ImpelEveRunContext | null;
+export declare function resolveVercelConnectGitHubConnectorUid(value?: string | undefined): string;
 export declare function createVercelConnectGitHubTokenParams(runContext: ImpelEveRunContext): Record<string, unknown>;
 //# sourceMappingURL=channel.d.ts.map

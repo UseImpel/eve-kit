@@ -22,6 +22,7 @@ import {
   defaultImpelEveChannel,
   extractImpelEveRunContextFromRequest,
   normalizeImpelEveRunContext,
+  resolveVercelConnectGitHubConnectorUid,
 } from "../dist/eve/channel.js";
 
 function sse(parts) {
@@ -267,6 +268,19 @@ test("default Impel Eve channel is stateful for workspace preparation", () => {
 });
 
 test("Vercel Connect GitHub token params support the connector default installation", () => {
+  assert.equal(
+    resolveVercelConnectGitHubConnectorUid(undefined),
+    "github/useimpel-github",
+  );
+  assert.equal(
+    resolveVercelConnectGitHubConnectorUid(""),
+    "github/useimpel-github",
+  );
+  assert.equal(
+    resolveVercelConnectGitHubConnectorUid(" github/custom "),
+    "github/custom",
+  );
+
   assert.deepEqual(createVercelConnectGitHubTokenParams({}), {
     subject: { type: "app" },
   });
