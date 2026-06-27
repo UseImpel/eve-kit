@@ -672,7 +672,12 @@ export function createVercelConnectGitHubTokenParams(runContext) {
                     repositories: repositoryNames.length === 1
                         ? repositoryNames[0]
                         : repositoryNames,
-                    permissions: "contents:read",
+                    permissions: [
+                        "contents:write",
+                        "pull_requests:write",
+                        "checks:read",
+                        "statuses:read",
+                    ],
                 },
             ]
             : undefined,

@@ -454,7 +454,12 @@ test("Vercel Connect GitHub token params support the connector default installat
         {
           type: "github_app_installation",
           repositories: ["next", "impel-agents"],
-          permissions: "contents:read",
+          permissions: [
+            "contents:write",
+            "pull_requests:write",
+            "checks:read",
+            "statuses:read",
+          ],
         },
       ],
     },
