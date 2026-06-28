@@ -5,6 +5,7 @@ export interface DefaultImpelEveChannelOptions {
     includePlaceholderAuth?: boolean;
     prepareAttachedRepos?: boolean;
     checkoutDepth?: number;
+    trustedVercelSubjects?: readonly string[];
 }
 export interface ImpelEveRunContext {
     orgId?: string;
@@ -46,7 +47,7 @@ export type ImpelEveChannel = Channel<ImpelEveChannelState, Record<string, never
     repos?: string[];
     workspacePrepared: boolean;
 }>;
-export declare function defaultImpelEveChannel({ basicUser, basicPassword, includePlaceholderAuth, prepareAttachedRepos, checkoutDepth, }?: DefaultImpelEveChannelOptions): ImpelEveChannel;
+export declare function defaultImpelEveChannel({ basicUser, basicPassword, includePlaceholderAuth, prepareAttachedRepos, checkoutDepth, trustedVercelSubjects, }?: DefaultImpelEveChannelOptions): ImpelEveChannel;
 export declare function createImpelEveChannelState(runContext: ImpelEveRunContext | null): ImpelEveChannelState;
 export declare function extractImpelEveRunContextFromRequest(request: Request): Promise<ImpelEveRunContext | null>;
 export declare function normalizeImpelEveRunContext(value: unknown): ImpelEveRunContext | null;
