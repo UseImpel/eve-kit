@@ -25,6 +25,7 @@ export interface DefaultImpelEveChannelOptions {
   includePlaceholderAuth?: boolean;
   prepareAttachedRepos?: boolean;
   checkoutDepth?: number;
+  trustedVercelSubjects?: readonly string[];
 }
 
 export interface ImpelEveRunContext {
@@ -120,6 +121,7 @@ export function defaultImpelEveChannel({
   includePlaceholderAuth = false,
   prepareAttachedRepos = true,
   checkoutDepth = readCheckoutDepthFromEnv(),
+  trustedVercelSubjects,
 }: DefaultImpelEveChannelOptions = {}): ImpelEveChannel {
   const basic =
     basicUser && basicPassword
@@ -128,7 +130,11 @@ export function defaultImpelEveChannel({
 
   const auth = [
     localDev(),
-    vercelOidc(),
+    vercelOidc(
+      trustedVercelSubjects?.length
+        ? { subjects: trustedVercelSubjects }
+        : undefined,
+    ),
     ...basic,
     ...(includePlaceholderAuth ? [placeholderAuth()] : []),
   ];

@@ -260,6 +260,17 @@ test("default Impel Eve channel is stateful for workspace preparation", () => {
   assert.deepEqual(channel.adapter.state, createImpelEveChannelState(null));
 });
 
+test("default Impel Eve channel accepts explicit trusted Vercel subjects", () => {
+  const channel = defaultImpelEveChannel({
+    trustedVercelSubjects: [
+      "owner:impel-bb80950e:project:next:environment:production",
+    ],
+  });
+
+  assert.equal(channel.routes.length, 3);
+  assert.equal(channel.adapter.kind, "defineChannel");
+});
+
 test("Impel Eve repo checkout planning keeps single-repo runs at workspace root", () => {
   assert.deepEqual(planImpelEveRepoCheckouts(["UseImpel/next"]), [
     {

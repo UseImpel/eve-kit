@@ -4,13 +4,15 @@ import { httpBasic, localDev, placeholderAuth, routeAuth, vercelOidc, } from "ev
 const DEFAULT_GITHUB_CONNECTOR_UID = "github/useimpel-github";
 const EVE_SESSION_ID_HEADER = "x-eve-session-id";
 const EVE_MESSAGE_STREAM_CONTENT_TYPE = "application/x-ndjson; charset=utf-8";
-export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_USER ?? process.env.IMPEL_EVE_BASIC_USER, basicPassword = process.env.EVE_APP_BASIC_PASSWORD ?? process.env.IMPEL_EVE_BASIC_PASSWORD, includePlaceholderAuth = false, prepareAttachedRepos = true, checkoutDepth = readCheckoutDepthFromEnv(), } = {}) {
+export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_USER ?? process.env.IMPEL_EVE_BASIC_USER, basicPassword = process.env.EVE_APP_BASIC_PASSWORD ?? process.env.IMPEL_EVE_BASIC_PASSWORD, includePlaceholderAuth = false, prepareAttachedRepos = true, checkoutDepth = readCheckoutDepthFromEnv(), trustedVercelSubjects, } = {}) {
     const basic = basicUser && basicPassword
         ? [httpBasic({ username: basicUser, password: basicPassword })]
         : [];
     const auth = [
         localDev(),
-        vercelOidc(),
+        vercelOidc(trustedVercelSubjects?.length
+            ? { subjects: trustedVercelSubjects }
+            : undefined),
         ...basic,
         ...(includePlaceholderAuth ? [placeholderAuth()] : []),
     ];
