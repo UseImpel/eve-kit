@@ -1,4 +1,3 @@
-import { JSONParseError } from "@ai-sdk/provider";
 import {
   parseJsonEventStream,
   type ParseResult,
@@ -36,13 +35,6 @@ export interface ImpelInferenceOptions {
   baseUrl?: string;
   apiKey?: string;
   orgId?: string;
-  /**
-   * model-stream: call hosted /v1/model/stream directly. This is the default
-   * path for Eve-native agents because it behaves like a regular AI SDK
-   * provider and keeps provider credential refresh centralized.
-   * workflow: start an older durable /v1/infer run and tail it.
-   */
-  transport?: "workflow" | "model-stream";
   /**
    * Forward reasoning stream parts to the AI SDK caller. Defaults to false
    * because long provider-managed agent loops can occasionally emit reasoning
@@ -87,11 +79,7 @@ type ParsedStreamPart = z.infer<typeof streamPartSchema>;
 
 interface InferenceStream {
   stream: ReadableStream<ParseResult<ParsedStreamPart>>;
-  runId?: string;
-  nextStartIndex?: number;
 }
-
-class StartEndpointUnavailableError extends Error {}
 
 const CLIENT_CONTEXT_SENTINEL = "Client context:\n";
 
@@ -343,13 +331,6 @@ async function inferenceHeaders({
   };
 }
 
-function parseStreamTailIndex(response: Response): number | undefined {
-  const value = response.headers.get("x-workflow-stream-tail-index");
-  if (value == null || value.trim() === "") return undefined;
-  const n = Number.parseInt(value, 10);
-  return Number.isInteger(n) && n >= 0 ? n : undefined;
-}
-
 async function inferenceResponseError(response: Response): Promise<Error> {
   const body = await response.text().catch(() => "");
   let message = body;
@@ -450,76 +431,11 @@ async function openInferenceStream({
     throw new Error("impel-inference response had no stream body");
   }
 
-  const tailIndex = parseStreamTailIndex(response);
   return {
     stream: parseJsonEventStream({
       stream: response.body,
       schema: streamPartSchema,
     }),
-    runId: response.headers.get("x-workflow-run-id") ?? undefined,
-    nextStartIndex: tailIndex == null ? undefined : tailIndex + 1,
-  };
-}
-
-async function startInferenceStream({
-  baseUrl,
-  headers,
-  body,
-  orgId,
-  signal,
-}: {
-  baseUrl: string;
-  headers: Record<string, string>;
-  body: unknown;
-  orgId: string;
-  signal?: AbortSignal;
-}): Promise<InferenceStream> {
-  const response = await fetch(`${baseUrl}/v1/infer/start`, {
-    method: "POST",
-    headers,
-    body: serializeJsonBody(body),
-    signal,
-  });
-
-  if (response.status === 404 || response.status === 405) {
-    throw new StartEndpointUnavailableError(
-      "impel-inference /v1/infer/start is unavailable",
-    );
-  }
-  if (!response.ok) throw await inferenceResponseError(response);
-
-  const payload = (await response.json().catch(() => undefined)) as
-    | { runId?: unknown; streamUrl?: unknown }
-    | undefined;
-  const runId =
-    typeof payload?.runId === "string"
-      ? payload.runId
-      : response.headers.get("x-workflow-run-id") ?? undefined;
-  if (!runId) {
-    throw new Error("impel-inference /v1/infer/start returned no runId");
-  }
-
-  const streamUrl = new URL(
-    typeof payload?.streamUrl === "string"
-      ? payload.streamUrl
-      : `/v1/infer/runs/${encodeURIComponent(runId)}/stream`,
-    `${baseUrl}/`,
-  );
-  if (!streamUrl.searchParams.has("startIndex")) {
-    streamUrl.searchParams.set("startIndex", "0");
-  }
-  if (!streamUrl.searchParams.has("orgId")) {
-    streamUrl.searchParams.set("orgId", orgId);
-  }
-  const stream = await openInferenceStream({
-    url: streamUrl.toString(),
-    headers,
-    signal,
-  });
-  return {
-    stream: stream.stream,
-    runId: stream.runId ?? runId,
-    nextStartIndex: stream.nextStartIndex,
   };
 }
 
@@ -658,12 +574,6 @@ function isTransientProviderError({
   );
 }
 
-function isJsonParseStreamError(error: unknown): boolean {
-  if (JSONParseError.isInstance(error)) return true;
-  const text = stringifyErrorLike(error);
-  return /AI_JSONParseError|JSON parsing failed/i.test(text);
-}
-
 function isUserVisibleStreamPart(part: LanguageModelV3StreamPart): boolean {
   return ![
     "stream-start",
@@ -751,7 +661,7 @@ function extractRunContextFromPrompt(
     } catch (err) {
       console.warn(
         "[impel-inference-provider] clientContext sentinel present but JSON.parse failed; " +
-          "repos will be undefined on the /v1/infer call (run may execute in an " +
+          "repos will be undefined on the /v1/model/stream call (run may execute in an " +
           `empty workspace). error=${String(err)} payload=${JSON.stringify(payload.slice(0, 200))}`,
       );
       return null;
@@ -760,7 +670,7 @@ function extractRunContextFromPrompt(
     if (parsed === null || typeof parsed !== "object") {
       console.warn(
         "[impel-inference-provider] clientContext sentinel parsed to a non-object; " +
-          "repos will be undefined on the /v1/infer call.",
+          "repos will be undefined on the /v1/model/stream call.",
       );
       return null;
     }
@@ -769,7 +679,7 @@ function extractRunContextFromPrompt(
     if (!context?.repos?.length) {
       console.warn(
         "[impel-inference-provider] clientContext sentinel parsed but yielded no repos; " +
-          "repos will be undefined on the /v1/infer call (run may execute in an " +
+          "repos will be undefined on the /v1/model/stream call (run may execute in an " +
           `empty workspace). parsedKeys=${JSON.stringify(Object.keys(parsed as Record<string, unknown>))}`,
       );
     }
@@ -920,34 +830,13 @@ export function impelInference(
     });
 
     async function createInferenceRun(): Promise<InferenceStream> {
-      if (opts?.transport !== "workflow") {
-        return await openInferenceStream({
-          url: `${baseUrl}/v1/model/stream`,
-          headers,
-          body,
-          method: "POST",
-          signal: options.abortSignal,
-        });
-      }
-
-      try {
-        return await startInferenceStream({
-          baseUrl,
-          headers,
-          body,
-          orgId,
-          signal: options.abortSignal,
-        });
-      } catch (error) {
-        if (!(error instanceof StartEndpointUnavailableError)) throw error;
-        return await openInferenceStream({
-          url: `${baseUrl}/v1/infer`,
-          headers,
-          body,
-          method: "POST",
-          signal: options.abortSignal,
-        });
-      }
+      return await openInferenceStream({
+        url: `${baseUrl}/v1/model/stream`,
+        headers,
+        body,
+        method: "POST",
+        signal: options.abortSignal,
+      });
     }
 
     const initial = await createInferenceRun();
@@ -958,17 +847,6 @@ export function impelInference(
     let sawUserVisibleOutput = false;
     let sawProviderError = false;
     let pendingFinish: LanguageModelV3StreamPart | undefined;
-    let upstreamPartCount = 0;
-    let inferenceRunId = initial.runId;
-    const maxResumeAttempts = envNumber(
-      "IMPEL_INFERENCE_RESUME_MAX_ATTEMPTS",
-      20,
-    );
-    const resumeDelayMs = envNumber("IMPEL_INFERENCE_RESUME_DELAY_MS", 1000);
-    const maxParseResumeAttempts = envNumber(
-      "IMPEL_INFERENCE_PARSE_RESUME_MAX_ATTEMPTS",
-      3,
-    );
     const maxTransientAttempts = envNumber(
       "IMPEL_INFERENCE_TRANSIENT_MAX_ATTEMPTS",
       2,
@@ -989,11 +867,6 @@ export function impelInference(
 
         void (async () => {
           let current = initial;
-          let resumeStartIndex = initial.nextStartIndex ?? 0;
-          let skipAlreadySeen = 0;
-          let resumeAttempts = 0;
-          let parseResumeAttempts = 0;
-          let lastParseResumeStartIndex: number | undefined;
           let transientAttempts = 0;
           let heldTextParts: LanguageModelV3StreamPart[] = [];
           let heldText = "";
@@ -1022,10 +895,7 @@ export function impelInference(
             for (;;) {
               upstreamReader = current.stream.getReader();
               let streamClosed = false;
-              let partsSeenThisConnection = 0;
               let retryTransient = false;
-              let retryResume = false;
-              const hasServiceCursor = current.nextStartIndex !== undefined;
 
               try {
                 for (;;) {
@@ -1035,22 +905,7 @@ export function impelInference(
                     break;
                   }
 
-                  if (partsSeenThisConnection++ < skipAlreadySeen) continue;
-                  upstreamPartCount += 1;
-
                   if (!chunk.success) {
-                    if (
-                      isJsonParseStreamError(chunk.error) &&
-                      inferenceRunId &&
-                      hasServiceCursor &&
-                      parseResumeAttempts < maxParseResumeAttempts &&
-                      lastParseResumeStartIndex !== resumeStartIndex &&
-                      resumeAttempts < maxResumeAttempts
-                    ) {
-                      retryResume = true;
-                      break;
-                    }
-
                     const transient = isTransientProviderError({
                       error: chunk.error,
                       heldText,
@@ -1089,7 +944,7 @@ export function impelInference(
                   } else if (part.type === "finish") {
                     const rejection = rejectedFinishMessage({
                       part,
-                      runId: inferenceRunId,
+                      runId,
                       label,
                     });
                     if (rejection) {
@@ -1168,43 +1023,12 @@ export function impelInference(
                 clearHeldTextParts();
                 pendingFinish = undefined;
                 sawProviderError = false;
-                upstreamPartCount = 0;
-                skipAlreadySeen = 0;
-                resumeAttempts = 0;
-                parseResumeAttempts = 0;
-                lastParseResumeStartIndex = undefined;
                 await sleep(
                   transientDelayMs * transientAttempts,
                   options.abortSignal,
                 );
                 const restarted = await createInferenceRun();
-                inferenceRunId = restarted.runId;
                 current = restarted;
-                continue;
-              }
-
-              if (retryResume && inferenceRunId) {
-                const runId = inferenceRunId;
-                resumeAttempts += 1;
-                parseResumeAttempts += 1;
-                await sleep(
-                  resumeDelayMs * Math.min(resumeAttempts, 5),
-                  options.abortSignal,
-                );
-                const startIndex = resumeStartIndex;
-                lastParseResumeStartIndex = startIndex;
-                skipAlreadySeen = startIndex === 0 ? upstreamPartCount : 0;
-                const resumed = await openInferenceStream({
-                  url:
-                    `${baseUrl}/v1/infer/runs/` +
-                    `${encodeURIComponent(runId)}/stream?startIndex=${startIndex}` +
-                    `&orgId=${encodeURIComponent(orgId)}`,
-                  headers,
-                  signal: options.abortSignal,
-                });
-                inferenceRunId = resumed.runId ?? runId;
-                resumeStartIndex = resumed.nextStartIndex ?? startIndex;
-                current = resumed;
                 continue;
               }
 
@@ -1221,29 +1045,6 @@ export function impelInference(
               }
 
               if (!streamClosed) continue;
-
-              if (
-                inferenceRunId &&
-                resumeAttempts < maxResumeAttempts &&
-                !pendingFinish
-              ) {
-                resumeAttempts += 1;
-                await sleep(resumeDelayMs, options.abortSignal);
-                const startIndex = resumeStartIndex;
-                skipAlreadySeen = startIndex === 0 ? upstreamPartCount : 0;
-                const resumed = await openInferenceStream({
-                  url:
-                    `${baseUrl}/v1/infer/runs/` +
-                    `${encodeURIComponent(inferenceRunId)}/stream?startIndex=${startIndex}` +
-                    `&orgId=${encodeURIComponent(orgId)}`,
-                  headers,
-                  signal: options.abortSignal,
-                });
-                inferenceRunId = resumed.runId ?? inferenceRunId;
-                resumeStartIndex = resumed.nextStartIndex ?? startIndex;
-                current = resumed;
-                continue;
-              }
 
               throw new Error(
                 (sawUpstreamPart

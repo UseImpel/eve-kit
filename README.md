@@ -67,18 +67,9 @@ only outside `NODE_ENV=production`, or when
 `IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK=true` / `allowLocalProviderFallback: true`
 is set for explicit local development.
 
-Claude uses the hosted `/v1/model/stream` transport by default. That path routes
-through the Claude Code gateway, where `impel-inference` owns Claude access-token
-resolution/refresh centrally instead of seeding a sandbox credential file.
-
-Set `IMPEL_CLAUDE_TRANSPORT=workflow` or pass `transport: "workflow"` only when
-you need the older durable `/v1/infer` sandbox path:
-
-```ts
-createImpelClaudeModel({
-  transport: "workflow",
-});
-```
+Claude uses hosted `/v1/model/stream`. That path routes through the Claude Code
+gateway, where `impel-inference` owns Claude access-token resolution and refresh
+centrally.
 
 ## Root Provider
 
@@ -94,15 +85,12 @@ const model = impelInference("claude-opus-4-8", {
 });
 ```
 
-`impelInference()` uses the hosted `/v1/model/stream` transport by default. Pass
-`transport: "workflow"` only for the older resumable `/v1/infer` sandbox path.
+`impelInference()` calls hosted `/v1/model/stream`.
 
 By default, `impelInference()` does not forward AI SDK reasoning stream parts to
-the caller. The full raw reasoning stream is still recorded in
-`impel-inference` provider traces, while the model stream remains stable across
-long provider-managed CLI agent loops. Set `streamReasoning: true` only for
-callers that specifically need reasoning parts and can tolerate AI SDK beta
-reasoning lifecycle strictness.
+the caller, which keeps the model stream stable across long provider-managed CLI
+agent loops. Set `streamReasoning: true` only for callers that specifically need
+reasoning parts and can tolerate AI SDK beta reasoning lifecycle strictness.
 This is intended for provider-managed CLI loops where the AI SDK caller is not
 responsible for replaying reasoning blocks back to the model.
 
@@ -130,27 +118,17 @@ export default defineAgent({
 });
 ```
 
-The helper defaults to `IMPEL_CODEX_MODEL_ID` or `gpt-5.5` and uses the hosted
-`/v1/model/stream` transport by default. That path lets `impel-inference` own
-ChatGPT token bootstrap and refresh through Codex app-server, instead of seeding
-refresh-capable credentials into a sandbox. It sends `provider:
-"codex-app-server"` and applies the autonomous Codex defaults `approvalMode:
-"never"`, `sandboxMode: "workspace-write"`, and `skipGitRepoCheck: true`.
-Override those values only when the host runtime needs a stricter mode.
-
-Set `transport: "workflow"` to use the older durable `/v1/infer` sandbox path:
-
-```ts
-createImpelCodexModel({
-  transport: "workflow",
-});
-```
+The helper defaults to `IMPEL_CODEX_MODEL_ID` or `gpt-5.5` and calls hosted
+`/v1/model/stream`. That path lets `impel-inference` own ChatGPT token bootstrap
+and refresh through Codex app-server. It sends `provider: "codex-app-server"`
+and applies the autonomous Codex defaults `approvalMode: "never"`, `sandboxMode:
+"workspace-write"`, and `skipGitRepoCheck: true`. Override those values only
+when the host runtime needs a stricter mode.
 
 The provider reads these environment variables by default:
 
 - `IMPEL_INFERENCE_URL`
 - `IMPEL_INFERENCE_API_KEY`
-- `IMPEL_CLAUDE_TRANSPORT` (`model-stream` or `workflow`)
 - `IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK`
 - `IMPEL_ORG_ID`
 - `IMPEL_RUN_REPOS`
@@ -168,11 +146,7 @@ You can override `baseUrl`, `apiKey`, `orgId`, request `headers`, and
 This package does not contain credentials and does not grant access to
 `impel-inference`. Every inference request requires a bearer token via `apiKey`
 or `IMPEL_INFERENCE_API_KEY`; calls fail locally before `fetch` when the key is
-missing. The service also enforces the bearer token on `/v1/infer`,
-`/v1/infer/start`, `/v1/infer/runs/:runId/stream`, and `/v1/model/stream`.
-Stream resumes include the resolved `orgId` as both `x-impel-org-id` and an
-`orgId` query parameter so the service can verify the run belongs to that org
-before tailing it.
+missing. The service also enforces the bearer token on `/v1/model/stream`.
 
 The default Eve HTTP channel enables `localDev()`, `vercelOidc()`, and Basic
 auth from `EVE_APP_BASIC_USER`/`EVE_APP_BASIC_PASSWORD` or

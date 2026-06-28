@@ -43,15 +43,6 @@ function sse(parts) {
   });
 }
 
-function rawSse(text) {
-  return new ReadableStream({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-      controller.close();
-    },
-  });
-}
-
 function promptWithClientContext(context) {
   return [
     {
@@ -588,7 +579,7 @@ test("forwards Eve tool call options to hosted model stream", async () => {
   }
 });
 
-test("model-stream transport forwards tools and toolChoice in callOptions", async () => {
+test("hosted stream forwards tools and toolChoice in callOptions", async () => {
   const requests = [];
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
@@ -640,7 +631,7 @@ test("model-stream transport forwards tools and toolChoice in callOptions", asyn
   }
 });
 
-test("model-stream transport applies per-call headers and does not serialize runtime-only options", async () => {
+test("hosted stream applies per-call headers and does not serialize runtime-only options", async () => {
   const requests = [];
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
@@ -687,7 +678,7 @@ test("model-stream transport applies per-call headers and does not serialize run
   }
 });
 
-test("model-stream transport keeps constructor and per-call providerOptions separate", async () => {
+test("hosted stream keeps constructor and per-call providerOptions separate", async () => {
   const requests = [];
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
@@ -729,7 +720,7 @@ test("model-stream transport keeps constructor and per-call providerOptions sepa
   }
 });
 
-test("model-stream transport rejects non-JSON call options before fetch", async () => {
+test("hosted stream rejects non-JSON call options before fetch", async () => {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async () => {
     assert.fail("fetch should not be called for non-JSON request bodies");
@@ -805,13 +796,13 @@ test("doGenerate surfaces hosted tool-call stream parts", async () => {
   }
 });
 
-test("workflow transport streams from /start and forwards auth, trace headers, and Eve clientContext", async () => {
+test("hosted stream forwards auth, trace headers, and Eve clientContext", async () => {
   const requests = [];
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
     requests.push({ url: String(url), init });
 
-    if (String(url).endsWith("/v1/infer/start")) {
+    if (String(url).endsWith("/v1/model/stream")) {
       const body = JSON.parse(String(init.body));
       assert.equal(init.headers.authorization, "Bearer secret");
       assert.equal(init.headers.traceparent, "00-test");
@@ -824,20 +815,6 @@ test("workflow transport streams from /start and forwards auth, trace headers, a
       assert.equal(body.installationId, "123");
       assert.equal(body.trace.traceId, "trace_1");
       assert.equal(body.providerOptions.permissionMode, "bypassPermissions");
-      return new Response(
-        JSON.stringify({
-          runId: "run_1",
-          streamUrl: "/v1/infer/runs/run_1/stream?startIndex=0&orgId=org_prompt",
-        }),
-        { status: 202, headers: { "content-type": "application/json" } },
-      );
-    }
-
-    if (
-      String(url).endsWith(
-        "/v1/infer/runs/run_1/stream?startIndex=0&orgId=org_prompt",
-      )
-    ) {
       return new Response(
         sse([
           { type: "stream-start", warnings: [] },
@@ -859,10 +836,7 @@ test("workflow transport streams from /start and forwards auth, trace headers, a
         ]),
         {
           status: 200,
-          headers: {
-            "content-type": "text/event-stream",
-            "x-workflow-run-id": "run_1",
-          },
+          headers: { "content-type": "text/event-stream" },
         },
       );
     }
@@ -875,7 +849,6 @@ test("workflow transport streams from /start and forwards auth, trace headers, a
       baseUrl: "https://infer.example",
       apiKey: "secret",
       orgId: "org_default",
-      transport: "workflow",
       providerOptions: { permissionMode: "bypassPermissions" },
       headers: () => ({ traceparent: "00-test", authorization: "ignored" }),
     });
@@ -893,7 +866,7 @@ test("workflow transport streams from /start and forwards auth, trace headers, a
     assert.equal(result.content[0].type, "text");
     assert.equal(result.content[0].text, "ready");
     assert.equal(result.finishReason.unified, "stop");
-    assert.equal(requests.length, 2);
+    assert.equal(requests.length, 1);
   } finally {
     globalThis.fetch = previousFetch;
   }
@@ -902,22 +875,7 @@ test("workflow transport streams from /start and forwards auth, trace headers, a
 test("filters reasoning stream parts by default", async () => {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
-    if (String(url).endsWith("/v1/infer/start")) {
-      return new Response(
-        JSON.stringify({
-          runId: "run_reasoning",
-          streamUrl:
-            "/v1/infer/runs/run_reasoning/stream?startIndex=0&orgId=org_default",
-        }),
-        { status: 202, headers: { "content-type": "application/json" } },
-      );
-    }
-
-    if (
-      String(url).endsWith(
-        "/v1/infer/runs/run_reasoning/stream?startIndex=0&orgId=org_default",
-      )
-    ) {
+    if (String(url).endsWith("/v1/model/stream")) {
       return new Response(
         sse([
           { type: "stream-start", warnings: [] },
@@ -942,7 +900,6 @@ test("filters reasoning stream parts by default", async () => {
       baseUrl: "https://infer.example",
       apiKey: "secret",
       orgId: "org_default",
-      transport: "workflow",
     });
 
     const parts = await readStreamParts(model);
@@ -958,22 +915,7 @@ test("filters reasoning stream parts by default", async () => {
 test("can opt in to forwarding reasoning stream parts", async () => {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
-    if (String(url).endsWith("/v1/infer/start")) {
-      return new Response(
-        JSON.stringify({
-          runId: "run_reasoning_opt_in",
-          streamUrl:
-            "/v1/infer/runs/run_reasoning_opt_in/stream?startIndex=0&orgId=org_default",
-        }),
-        { status: 202, headers: { "content-type": "application/json" } },
-      );
-    }
-
-    if (
-      String(url).endsWith(
-        "/v1/infer/runs/run_reasoning_opt_in/stream?startIndex=0&orgId=org_default",
-      )
-    ) {
+    if (String(url).endsWith("/v1/model/stream")) {
       return new Response(
         sse([
           { type: "stream-start", warnings: [] },
@@ -998,7 +940,6 @@ test("can opt in to forwarding reasoning stream parts", async () => {
       baseUrl: "https://infer.example",
       apiKey: "secret",
       orgId: "org_default",
-      transport: "workflow",
       streamReasoning: true,
     });
 
@@ -1068,10 +1009,7 @@ test("createImpelCodexModel uses hosted model stream by default", async () => {
         ]),
         {
           status: 200,
-          headers: {
-            "content-type": "text/event-stream",
-            "x-workflow-run-id": "run_codex",
-          },
+          headers: { "content-type": "text/event-stream" },
         },
       );
     }
@@ -1092,81 +1030,6 @@ test("createImpelCodexModel uses hosted model stream by default", async () => {
     assert.equal(result.content[0].type, "text");
     assert.equal(result.content[0].text, "coded");
     assert.equal(requests.length, 1);
-  } finally {
-    globalThis.fetch = previousFetch;
-  }
-});
-
-test("createImpelCodexModel can still use durable workflow transport", async () => {
-  const requests = [];
-  const previousFetch = globalThis.fetch;
-  globalThis.fetch = async (url, init = {}) => {
-    requests.push({ url: String(url), init });
-
-    if (String(url).endsWith("/v1/infer/start")) {
-      const body = JSON.parse(String(init.body));
-      assert.equal(body.provider, "codex-cli");
-      assert.equal(body.modelId, "gpt-5.5");
-      assert.equal(body.orgId, "org_codex");
-      return new Response(
-        JSON.stringify({
-          runId: "run_codex",
-          streamUrl: "/v1/infer/runs/run_codex/stream?startIndex=0&orgId=org_codex",
-        }),
-        { status: 202, headers: { "content-type": "application/json" } },
-      );
-    }
-
-    if (
-      String(url).endsWith(
-        "/v1/infer/runs/run_codex/stream?startIndex=0&orgId=org_codex",
-      )
-    ) {
-      return new Response(
-        sse([
-          { type: "stream-start", warnings: [] },
-          { type: "text-start", id: "txt" },
-          { type: "text-delta", id: "txt", delta: "coded" },
-          { type: "text-end", id: "txt" },
-          {
-            type: "finish",
-            finishReason: { unified: "stop", raw: "completed" },
-            usage: {
-              inputTokens: {},
-              outputTokens: {},
-            },
-            providerMetadata: {
-              "codex-cli": { terminalReason: "completed" },
-            },
-          },
-          "[DONE]",
-        ]),
-        {
-          status: 200,
-          headers: {
-            "content-type": "text/event-stream",
-            "x-workflow-run-id": "run_codex",
-          },
-        },
-      );
-    }
-
-    throw new Error(`unexpected fetch ${url}`);
-  };
-
-  try {
-    const model = createImpelCodexModel({
-      baseUrl: "https://infer.example",
-      apiKey: "secret",
-      orgId: "org_codex",
-      transport: "workflow",
-    });
-
-    const result = await model.doGenerate({ prompt: [] });
-
-    assert.equal(result.content[0].type, "text");
-    assert.equal(result.content[0].text, "coded");
-    assert.equal(requests.length, 2);
   } finally {
     globalThis.fetch = previousFetch;
   }
@@ -1207,18 +1070,16 @@ test("createImpelClaudeModel requires impel-inference in production", () => {
   }
 });
 
-test("createImpelClaudeModel uses hosted model-stream transport by default", async () => {
+test("createImpelClaudeModel uses hosted model stream", async () => {
   const requests = [];
   const previousFetch = globalThis.fetch;
   const previousUrl = process.env.IMPEL_INFERENCE_URL;
   const previousKey = process.env.IMPEL_INFERENCE_API_KEY;
   const previousOrg = process.env.IMPEL_ORG_ID;
-  const previousTransport = process.env.IMPEL_CLAUDE_TRANSPORT;
 
   process.env.IMPEL_INFERENCE_URL = "https://inference.test";
   process.env.IMPEL_INFERENCE_API_KEY = "secret";
   process.env.IMPEL_ORG_ID = "org_env";
-  delete process.env.IMPEL_CLAUDE_TRANSPORT;
   globalThis.fetch = async (url, init = {}) => {
     requests.push({ url: String(url), init });
     assert.equal(String(url), "https://inference.test/v1/model/stream");
@@ -1266,71 +1127,6 @@ test("createImpelClaudeModel uses hosted model-stream transport by default", asy
     } else {
       process.env.IMPEL_ORG_ID = previousOrg;
     }
-    if (previousTransport === undefined) {
-      delete process.env.IMPEL_CLAUDE_TRANSPORT;
-    } else {
-      process.env.IMPEL_CLAUDE_TRANSPORT = previousTransport;
-    }
-  }
-});
-
-test("createImpelClaudeModel can explicitly use durable workflow transport", async () => {
-  const requests = [];
-  const previousFetch = globalThis.fetch;
-  globalThis.fetch = async (url, init = {}) => {
-    requests.push({ url: String(url), init });
-
-    if (String(url).endsWith("/v1/infer/start")) {
-      const body = JSON.parse(String(init.body));
-      assert.equal(body.provider, "claude-code");
-      assert.equal(body.modelId, "claude-sonnet-4-5");
-      assert.equal(body.orgId, "org_workflow");
-      return new Response(
-        JSON.stringify({
-          runId: "run_claude_workflow",
-          streamUrl:
-            "/v1/infer/runs/run_claude_workflow/stream?startIndex=0&orgId=org_workflow",
-        }),
-        { status: 202, headers: { "content-type": "application/json" } },
-      );
-    }
-
-    if (
-      String(url).endsWith(
-        "/v1/infer/runs/run_claude_workflow/stream?startIndex=0&orgId=org_workflow",
-      )
-    ) {
-      return new Response(
-        sse([
-          { type: "stream-start", warnings: [] },
-          { type: "text-start", id: "txt" },
-          { type: "text-delta", id: "txt", delta: "workflow" },
-          { type: "text-end", id: "txt" },
-          finishPart(),
-          "[DONE]",
-        ]),
-        { status: 200, headers: { "content-type": "text/event-stream" } },
-      );
-    }
-
-    throw new Error(`unexpected fetch ${url}`);
-  };
-
-  try {
-    const model = createImpelClaudeModel({
-      baseUrl: "https://inference.test",
-      apiKey: "secret",
-      orgId: "org_workflow",
-      modelId: "claude-sonnet-4-5",
-      transport: "workflow",
-    });
-    const result = await model.doGenerate({ prompt: [] });
-
-    assert.equal(result.content[0].type, "text");
-    assert.equal(result.content[0].text, "workflow");
-    assert.equal(requests.length, 2);
-  } finally {
-    globalThis.fetch = previousFetch;
   }
 });
 
@@ -1342,25 +1138,11 @@ test("retries transient provider overload before surfacing API error text", asyn
   process.env.IMPEL_INFERENCE_TRANSIENT_RETRY_DELAY_MS = "0";
   globalThis.fetch = async (url, init = {}) => {
     requests.push({ url: String(url), init });
-    const startCount = requests.filter((request) =>
-      request.url.endsWith("/v1/infer/start"),
+    const streamCount = requests.filter((request) =>
+      request.url.endsWith("/v1/model/stream"),
     ).length;
 
-    if (String(url).endsWith("/v1/infer/start")) {
-      return new Response(
-        JSON.stringify({
-          runId: `run_${startCount}`,
-          streamUrl: `/v1/infer/runs/run_${startCount}/stream?startIndex=0&orgId=org_default`,
-        }),
-        { status: 202, headers: { "content-type": "application/json" } },
-      );
-    }
-
-    if (
-      String(url).endsWith(
-        "/v1/infer/runs/run_1/stream?startIndex=0&orgId=org_default",
-      )
-    ) {
+    if (String(url).endsWith("/v1/model/stream") && streamCount === 1) {
       return new Response(
         sse([
           { type: "stream-start", warnings: [] },
@@ -1378,11 +1160,7 @@ test("retries transient provider overload before surfacing API error text", asyn
       );
     }
 
-    if (
-      String(url).endsWith(
-        "/v1/infer/runs/run_2/stream?startIndex=0&orgId=org_default",
-      )
-    ) {
+    if (String(url).endsWith("/v1/model/stream") && streamCount === 2) {
       return new Response(
         sse([
           { type: "stream-start", warnings: [] },
@@ -1414,7 +1192,6 @@ test("retries transient provider overload before surfacing API error text", asyn
       baseUrl: "https://infer.example",
       apiKey: "secret",
       orgId: "org_default",
-      transport: "workflow",
     });
 
     const result = await model.doGenerate({
@@ -1424,7 +1201,7 @@ test("retries transient provider overload before surfacing API error text", asyn
     assert.equal(result.content[0].type, "text");
     assert.equal(result.content[0].text, "ready");
     assert.equal(
-      requests.filter((request) => request.url.endsWith("/v1/infer/start"))
+      requests.filter((request) => request.url.endsWith("/v1/model/stream"))
         .length,
       2,
     );
@@ -1441,22 +1218,7 @@ test("retries transient provider overload before surfacing API error text", asyn
 test("surfaces structured provider errors with preceding provider text", async () => {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
-    if (String(url).endsWith("/v1/infer/start")) {
-      return new Response(
-        JSON.stringify({
-          runId: "run_auth",
-          streamUrl:
-            "/v1/infer/runs/run_auth/stream?startIndex=0&orgId=org_auth",
-        }),
-        { status: 202, headers: { "content-type": "application/json" } },
-      );
-    }
-
-    if (
-      String(url).endsWith(
-        "/v1/infer/runs/run_auth/stream?startIndex=0&orgId=org_auth",
-      )
-    ) {
+    if (String(url).endsWith("/v1/model/stream")) {
       return new Response(
         sse([
           { type: "stream-start", warnings: [] },
@@ -1473,10 +1235,7 @@ test("surfaces structured provider errors with preceding provider text", async (
         ]),
         {
           status: 200,
-          headers: {
-            "content-type": "text/event-stream",
-            "x-workflow-run-id": "run_auth",
-          },
+          headers: { "content-type": "text/event-stream" },
         },
       );
     }
@@ -1489,7 +1248,6 @@ test("surfaces structured provider errors with preceding provider text", async (
       baseUrl: "https://infer.example",
       apiKey: "secret",
       orgId: "org_auth",
-      transport: "workflow",
     });
 
     await assert.rejects(
@@ -1508,211 +1266,5 @@ test("surfaces structured provider errors with preceding provider text", async (
     );
   } finally {
     globalThis.fetch = previousFetch;
-  }
-});
-
-test("resumes detached stream with service cursor and org id", async () => {
-  const requests = [];
-  const previousFetch = globalThis.fetch;
-  const previousResumeDelay = process.env.IMPEL_INFERENCE_RESUME_DELAY_MS;
-  process.env.IMPEL_INFERENCE_RESUME_DELAY_MS = "0";
-
-  globalThis.fetch = async (url, init = {}) => {
-    requests.push({ url: String(url), init });
-
-    if (String(url).endsWith("/v1/infer/start")) {
-      return new Response(
-        JSON.stringify({
-          runId: "run_cursor",
-          streamUrl:
-            "/v1/infer/runs/run_cursor/stream?startIndex=0&orgId=org_default",
-        }),
-        { status: 202, headers: { "content-type": "application/json" } },
-      );
-    }
-
-    if (
-      String(url).endsWith(
-        "/v1/infer/runs/run_cursor/stream?startIndex=0&orgId=org_default",
-      )
-    ) {
-      return new Response(sse([{ type: "stream-start", warnings: [] }]), {
-        status: 200,
-        headers: {
-          "content-type": "text/event-stream",
-          "x-workflow-run-id": "run_cursor",
-          "x-workflow-stream-tail-index": "4",
-        },
-      });
-    }
-
-    if (
-      String(url).endsWith(
-        "/v1/infer/runs/run_cursor/stream?startIndex=5&orgId=org_default",
-      )
-    ) {
-      return new Response(
-        sse([
-          { type: "stream-start", warnings: [] },
-          { type: "text-start", id: "txt" },
-          { type: "text-delta", id: "txt", delta: "resumed" },
-          { type: "text-end", id: "txt" },
-          {
-            type: "finish",
-            finishReason: { unified: "stop", raw: "completed" },
-            usage: {
-              inputTokens: {},
-              outputTokens: {},
-            },
-            providerMetadata: {
-              "claude-code": { terminalReason: "completed" },
-            },
-          },
-          "[DONE]",
-        ]),
-        {
-          status: 200,
-          headers: {
-            "content-type": "text/event-stream",
-            "x-workflow-run-id": "run_cursor",
-          },
-        },
-      );
-    }
-
-    throw new Error(`unexpected fetch ${url}`);
-  };
-
-  try {
-    const model = impelInference("claude-opus-4-8", {
-      baseUrl: "https://infer.example",
-      apiKey: "secret",
-      orgId: "org_default",
-      transport: "workflow",
-    });
-
-    const result = await model.doGenerate({
-      prompt: [{ role: "user", content: [{ type: "text", text: "ready?" }] }],
-    });
-
-    assert.equal(result.content[0].type, "text");
-    assert.equal(result.content[0].text, "resumed");
-    assert.ok(
-      requests.some((request) =>
-        request.url.endsWith(
-          "/v1/infer/runs/run_cursor/stream?startIndex=5&orgId=org_default",
-        ),
-      ),
-    );
-  } finally {
-    globalThis.fetch = previousFetch;
-    if (previousResumeDelay === undefined) {
-      delete process.env.IMPEL_INFERENCE_RESUME_DELAY_MS;
-    } else {
-      process.env.IMPEL_INFERENCE_RESUME_DELAY_MS = previousResumeDelay;
-    }
-  }
-});
-
-test("recovers malformed stream frames by resuming the same inference run", async () => {
-  const requests = [];
-  const previousFetch = globalThis.fetch;
-  const previousResumeDelay = process.env.IMPEL_INFERENCE_RESUME_DELAY_MS;
-  process.env.IMPEL_INFERENCE_RESUME_DELAY_MS = "0";
-
-  globalThis.fetch = async (url, init = {}) => {
-    requests.push({ url: String(url), init });
-
-    if (String(url).endsWith("/v1/infer/start")) {
-      return new Response(
-        JSON.stringify({
-          runId: "run_parse",
-          streamUrl:
-            "/v1/infer/runs/run_parse/stream?startIndex=0&orgId=org_default",
-        }),
-        { status: 202, headers: { "content-type": "application/json" } },
-      );
-    }
-
-    if (
-      String(url).endsWith(
-        "/v1/infer/runs/run_parse/stream?startIndex=0&orgId=org_default",
-      )
-    ) {
-      return new Response(
-        rawSse(
-          'data: {"type":"tool-input-delta","id":"tool","delta":"unterminated\n\n',
-        ),
-        {
-          status: 200,
-          headers: {
-            "content-type": "text/event-stream",
-            "x-workflow-run-id": "run_parse",
-            "x-workflow-stream-tail-index": "6",
-          },
-        },
-      );
-    }
-
-    if (
-      String(url).endsWith(
-        "/v1/infer/runs/run_parse/stream?startIndex=7&orgId=org_default",
-      )
-    ) {
-      return new Response(
-        sse([
-          { type: "stream-start", warnings: [] },
-          { type: "text-start", id: "txt" },
-          { type: "text-delta", id: "txt", delta: "continued" },
-          { type: "text-end", id: "txt" },
-          finishPart(),
-          "[DONE]",
-        ]),
-        {
-          status: 200,
-          headers: {
-            "content-type": "text/event-stream",
-            "x-workflow-run-id": "run_parse",
-          },
-        },
-      );
-    }
-
-    throw new Error(`unexpected fetch ${url}`);
-  };
-
-  try {
-    const model = impelInference("claude-sonnet-4-5", {
-      baseUrl: "https://infer.example",
-      apiKey: "secret",
-      orgId: "org_default",
-      transport: "workflow",
-    });
-
-    const result = await model.doGenerate({
-      prompt: [{ role: "user", content: [{ type: "text", text: "continue" }] }],
-    });
-
-    assert.equal(result.content[0].type, "text");
-    assert.equal(result.content[0].text, "continued");
-    assert.equal(
-      requests.filter((request) => request.url.endsWith("/v1/infer/start"))
-        .length,
-      1,
-    );
-    assert.ok(
-      requests.some((request) =>
-        request.url.endsWith(
-          "/v1/infer/runs/run_parse/stream?startIndex=7&orgId=org_default",
-        ),
-      ),
-    );
-  } finally {
-    globalThis.fetch = previousFetch;
-    if (previousResumeDelay === undefined) {
-      delete process.env.IMPEL_INFERENCE_RESUME_DELAY_MS;
-    } else {
-      process.env.IMPEL_INFERENCE_RESUME_DELAY_MS = previousResumeDelay;
-    }
   }
 });

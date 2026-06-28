@@ -88,17 +88,8 @@ function allowLocalProviderFallback(explicit) {
         return env;
     return process.env.NODE_ENV !== "production";
 }
-function resolveClaudeTransport(explicit) {
-    if (explicit)
-        return explicit;
-    const value = process.env.IMPEL_CLAUDE_TRANSPORT?.trim();
-    return value === "model-stream" || value === "workflow"
-        ? value
-        : "model-stream";
-}
 export function createImpelClaudeModel(options = {}) {
     const { modelId: explicitModelId, defaultModelId, localModel, defaultLocalModel = "opus", providerOptions, localProviderOptions, permissionMode, allowDangerouslySkipPermissions, effort, cwd, allowLocalProviderFallback: explicitAllowLocalProviderFallback, provider = "claude-code", ...inferenceOptions } = options;
-    const transport = resolveClaudeTransport(inferenceOptions.transport);
     const modelId = resolveImpelClaudeModelId({
         modelId: explicitModelId,
         defaultModelId,
@@ -113,7 +104,6 @@ export function createImpelClaudeModel(options = {}) {
     if (inferenceOptions.baseUrl ?? process.env.IMPEL_INFERENCE_URL) {
         return impelInference(modelId, {
             ...inferenceOptions,
-            transport,
             provider,
             providerOptions: resolvedProviderOptions,
         });
@@ -151,15 +141,14 @@ export function createImpelClaudeModel(options = {}) {
     return claudeCode(localModel ?? inferClaudeCodeLocalModel(modelId, defaultLocalModel), { ...resolvedProviderOptions, ...(localProviderOptions ?? {}) });
 }
 export function createImpelCodexModel(options = {}) {
-    const { modelId: explicitModelId, defaultModelId, providerOptions, approvalMode, sandboxMode, skipGitRepoCheck, effort, transport = "model-stream", ...inferenceOptions } = options;
+    const { modelId: explicitModelId, defaultModelId, providerOptions, approvalMode, sandboxMode, skipGitRepoCheck, effort, ...inferenceOptions } = options;
     const modelId = resolveImpelCodexModelId({
         modelId: explicitModelId,
         defaultModelId,
     });
     return impelInference(modelId, {
         ...inferenceOptions,
-        transport,
-        provider: transport === "model-stream" ? "codex-app-server" : "codex-cli",
+        provider: "codex-app-server",
         providerOptions: createImpelCodexProviderOptions({
             providerOptions,
             approvalMode,
@@ -177,7 +166,6 @@ export function createImpelOpenAIResponsesModel(options = {}) {
             modelId: options.modelId,
             defaultModelId: options.defaultModelId ?? IMPEL_DEFAULT_OPENAI_RESPONSES_MODEL_ID,
         }),
-        transport: options.transport ?? "model-stream",
     });
 }
 //# sourceMappingURL=model.js.map

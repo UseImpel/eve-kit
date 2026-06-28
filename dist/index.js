@@ -1,12 +1,9 @@
-import { JSONParseError } from "@ai-sdk/provider";
 import { parseJsonEventStream, } from "@ai-sdk/provider-utils";
 import { z } from "zod";
 const streamPartSchema = z.object({ type: z.string() }).passthrough();
 const errorSchema = z
     .object({ error: z.object({ message: z.string() }).passthrough() })
     .passthrough();
-class StartEndpointUnavailableError extends Error {
-}
 const CLIENT_CONTEXT_SENTINEL = "Client context:\n";
 function envNumber(name, fallback) {
     const value = Number(process.env[name]);
@@ -194,13 +191,6 @@ async function inferenceHeaders({ apiKey, orgId, extraHeaders, callHeaders, }) {
         "content-type": "application/json",
     };
 }
-function parseStreamTailIndex(response) {
-    const value = response.headers.get("x-workflow-stream-tail-index");
-    if (value == null || value.trim() === "")
-        return undefined;
-    const n = Number.parseInt(value, 10);
-    return Number.isInteger(n) && n >= 0 ? n : undefined;
-}
 async function inferenceResponseError(response) {
     const body = await response.text().catch(() => "");
     let message = body;
@@ -270,53 +260,11 @@ async function openInferenceStream({ url, headers, body, method = "GET", signal,
     if (!response.body) {
         throw new Error("impel-inference response had no stream body");
     }
-    const tailIndex = parseStreamTailIndex(response);
     return {
         stream: parseJsonEventStream({
             stream: response.body,
             schema: streamPartSchema,
         }),
-        runId: response.headers.get("x-workflow-run-id") ?? undefined,
-        nextStartIndex: tailIndex == null ? undefined : tailIndex + 1,
-    };
-}
-async function startInferenceStream({ baseUrl, headers, body, orgId, signal, }) {
-    const response = await fetch(`${baseUrl}/v1/infer/start`, {
-        method: "POST",
-        headers,
-        body: serializeJsonBody(body),
-        signal,
-    });
-    if (response.status === 404 || response.status === 405) {
-        throw new StartEndpointUnavailableError("impel-inference /v1/infer/start is unavailable");
-    }
-    if (!response.ok)
-        throw await inferenceResponseError(response);
-    const payload = (await response.json().catch(() => undefined));
-    const runId = typeof payload?.runId === "string"
-        ? payload.runId
-        : response.headers.get("x-workflow-run-id") ?? undefined;
-    if (!runId) {
-        throw new Error("impel-inference /v1/infer/start returned no runId");
-    }
-    const streamUrl = new URL(typeof payload?.streamUrl === "string"
-        ? payload.streamUrl
-        : `/v1/infer/runs/${encodeURIComponent(runId)}/stream`, `${baseUrl}/`);
-    if (!streamUrl.searchParams.has("startIndex")) {
-        streamUrl.searchParams.set("startIndex", "0");
-    }
-    if (!streamUrl.searchParams.has("orgId")) {
-        streamUrl.searchParams.set("orgId", orgId);
-    }
-    const stream = await openInferenceStream({
-        url: streamUrl.toString(),
-        headers,
-        signal,
-    });
-    return {
-        stream: stream.stream,
-        runId: stream.runId ?? runId,
-        nextStartIndex: stream.nextStartIndex,
     };
 }
 function abortError(signal) {
@@ -418,12 +366,6 @@ function isTransientProviderError({ error, heldText, }) {
         /rate.?limit/i.test(text) ||
         /\b(?:econnreset|etimedout|timeout)\b/i.test(text));
 }
-function isJsonParseStreamError(error) {
-    if (JSONParseError.isInstance(error))
-        return true;
-    const text = stringifyErrorLike(error);
-    return /AI_JSONParseError|JSON parsing failed/i.test(text);
-}
 function isUserVisibleStreamPart(part) {
     return ![
         "stream-start",
@@ -501,19 +443,19 @@ function extractRunContextFromPrompt(prompt) {
         }
         catch (err) {
             console.warn("[impel-inference-provider] clientContext sentinel present but JSON.parse failed; " +
-                "repos will be undefined on the /v1/infer call (run may execute in an " +
+                "repos will be undefined on the /v1/model/stream call (run may execute in an " +
                 `empty workspace). error=${String(err)} payload=${JSON.stringify(payload.slice(0, 200))}`);
             return null;
         }
         if (parsed === null || typeof parsed !== "object") {
             console.warn("[impel-inference-provider] clientContext sentinel parsed to a non-object; " +
-                "repos will be undefined on the /v1/infer call.");
+                "repos will be undefined on the /v1/model/stream call.");
             return null;
         }
         const context = normalizeRunContext(parsed);
         if (!context?.repos?.length) {
             console.warn("[impel-inference-provider] clientContext sentinel parsed but yielded no repos; " +
-                "repos will be undefined on the /v1/infer call (run may execute in an " +
+                "repos will be undefined on the /v1/model/stream call (run may execute in an " +
                 `empty workspace). parsedKeys=${JSON.stringify(Object.keys(parsed))}`);
         }
         return context;
@@ -619,35 +561,13 @@ export function impelInference(modelId, opts) {
             callHeaders: options.headers,
         });
         async function createInferenceRun() {
-            if (opts?.transport !== "workflow") {
-                return await openInferenceStream({
-                    url: `${baseUrl}/v1/model/stream`,
-                    headers,
-                    body,
-                    method: "POST",
-                    signal: options.abortSignal,
-                });
-            }
-            try {
-                return await startInferenceStream({
-                    baseUrl,
-                    headers,
-                    body,
-                    orgId,
-                    signal: options.abortSignal,
-                });
-            }
-            catch (error) {
-                if (!(error instanceof StartEndpointUnavailableError))
-                    throw error;
-                return await openInferenceStream({
-                    url: `${baseUrl}/v1/infer`,
-                    headers,
-                    body,
-                    method: "POST",
-                    signal: options.abortSignal,
-                });
-            }
+            return await openInferenceStream({
+                url: `${baseUrl}/v1/model/stream`,
+                headers,
+                body,
+                method: "POST",
+                signal: options.abortSignal,
+            });
         }
         const initial = await createInferenceRun();
         let sawStreamStart = false;
@@ -656,11 +576,6 @@ export function impelInference(modelId, opts) {
         let sawUserVisibleOutput = false;
         let sawProviderError = false;
         let pendingFinish;
-        let upstreamPartCount = 0;
-        let inferenceRunId = initial.runId;
-        const maxResumeAttempts = envNumber("IMPEL_INFERENCE_RESUME_MAX_ATTEMPTS", 20);
-        const resumeDelayMs = envNumber("IMPEL_INFERENCE_RESUME_DELAY_MS", 1000);
-        const maxParseResumeAttempts = envNumber("IMPEL_INFERENCE_PARSE_RESUME_MAX_ATTEMPTS", 3);
         const maxTransientAttempts = envNumber("IMPEL_INFERENCE_TRANSIENT_MAX_ATTEMPTS", 2);
         const transientDelayMs = envNumber("IMPEL_INFERENCE_TRANSIENT_RETRY_DELAY_MS", 1500);
         let upstreamReader;
@@ -670,11 +585,6 @@ export function impelInference(modelId, opts) {
                 sawStreamStart = true;
                 void (async () => {
                     let current = initial;
-                    let resumeStartIndex = initial.nextStartIndex ?? 0;
-                    let skipAlreadySeen = 0;
-                    let resumeAttempts = 0;
-                    let parseResumeAttempts = 0;
-                    let lastParseResumeStartIndex;
                     let transientAttempts = 0;
                     let heldTextParts = [];
                     let heldText = "";
@@ -701,10 +611,7 @@ export function impelInference(modelId, opts) {
                         for (;;) {
                             upstreamReader = current.stream.getReader();
                             let streamClosed = false;
-                            let partsSeenThisConnection = 0;
                             let retryTransient = false;
-                            let retryResume = false;
-                            const hasServiceCursor = current.nextStartIndex !== undefined;
                             try {
                                 for (;;) {
                                     const { done, value: chunk } = await upstreamReader.read();
@@ -712,19 +619,7 @@ export function impelInference(modelId, opts) {
                                         streamClosed = true;
                                         break;
                                     }
-                                    if (partsSeenThisConnection++ < skipAlreadySeen)
-                                        continue;
-                                    upstreamPartCount += 1;
                                     if (!chunk.success) {
-                                        if (isJsonParseStreamError(chunk.error) &&
-                                            inferenceRunId &&
-                                            hasServiceCursor &&
-                                            parseResumeAttempts < maxParseResumeAttempts &&
-                                            lastParseResumeStartIndex !== resumeStartIndex &&
-                                            resumeAttempts < maxResumeAttempts) {
-                                            retryResume = true;
-                                            break;
-                                        }
                                         const transient = isTransientProviderError({
                                             error: chunk.error,
                                             heldText,
@@ -757,7 +652,7 @@ export function impelInference(modelId, opts) {
                                     else if (part.type === "finish") {
                                         const rejection = rejectedFinishMessage({
                                             part,
-                                            runId: inferenceRunId,
+                                            runId,
                                             label,
                                         });
                                         if (rejection) {
@@ -827,35 +722,9 @@ export function impelInference(modelId, opts) {
                                 clearHeldTextParts();
                                 pendingFinish = undefined;
                                 sawProviderError = false;
-                                upstreamPartCount = 0;
-                                skipAlreadySeen = 0;
-                                resumeAttempts = 0;
-                                parseResumeAttempts = 0;
-                                lastParseResumeStartIndex = undefined;
                                 await sleep(transientDelayMs * transientAttempts, options.abortSignal);
                                 const restarted = await createInferenceRun();
-                                inferenceRunId = restarted.runId;
                                 current = restarted;
-                                continue;
-                            }
-                            if (retryResume && inferenceRunId) {
-                                const runId = inferenceRunId;
-                                resumeAttempts += 1;
-                                parseResumeAttempts += 1;
-                                await sleep(resumeDelayMs * Math.min(resumeAttempts, 5), options.abortSignal);
-                                const startIndex = resumeStartIndex;
-                                lastParseResumeStartIndex = startIndex;
-                                skipAlreadySeen = startIndex === 0 ? upstreamPartCount : 0;
-                                const resumed = await openInferenceStream({
-                                    url: `${baseUrl}/v1/infer/runs/` +
-                                        `${encodeURIComponent(runId)}/stream?startIndex=${startIndex}` +
-                                        `&orgId=${encodeURIComponent(orgId)}`,
-                                    headers,
-                                    signal: options.abortSignal,
-                                });
-                                inferenceRunId = resumed.runId ?? runId;
-                                resumeStartIndex = resumed.nextStartIndex ?? startIndex;
-                                current = resumed;
                                 continue;
                             }
                             if (pendingFinish) {
@@ -870,25 +739,6 @@ export function impelInference(modelId, opts) {
                             }
                             if (!streamClosed)
                                 continue;
-                            if (inferenceRunId &&
-                                resumeAttempts < maxResumeAttempts &&
-                                !pendingFinish) {
-                                resumeAttempts += 1;
-                                await sleep(resumeDelayMs, options.abortSignal);
-                                const startIndex = resumeStartIndex;
-                                skipAlreadySeen = startIndex === 0 ? upstreamPartCount : 0;
-                                const resumed = await openInferenceStream({
-                                    url: `${baseUrl}/v1/infer/runs/` +
-                                        `${encodeURIComponent(inferenceRunId)}/stream?startIndex=${startIndex}` +
-                                        `&orgId=${encodeURIComponent(orgId)}`,
-                                    headers,
-                                    signal: options.abortSignal,
-                                });
-                                inferenceRunId = resumed.runId ?? inferenceRunId;
-                                resumeStartIndex = resumed.nextStartIndex ?? startIndex;
-                                current = resumed;
-                                continue;
-                            }
                             throw new Error((sawUpstreamPart
                                 ? "impel-inference stream closed before a successful finish event; "
                                 : "impel-inference stream closed before emitting any provider events; ") +
