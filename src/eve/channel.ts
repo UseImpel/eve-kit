@@ -73,14 +73,18 @@ type ImpelEveChannelContext = {
 export type ImpelEveChannel = Channel<
   ImpelEveChannelState,
   Record<string, never>,
-  {
-    orgId?: string;
-    runId?: string;
-    traceId?: string;
-    repos?: string[];
-    workspacePrepared: boolean;
-  }
+  ImpelEveChannelMetadata
 >;
+
+export type ImpelEveChannelMetadata = Record<string, unknown> &
+  ImpelEveRunContext & {
+    workspacePrepared: boolean;
+  };
+
+export interface PrepareImpelEveWorkspaceOptions {
+  checkoutDepth?: number;
+  getSandbox: () => Promise<SandboxSession>;
+}
 
 interface GitHubRepoRef {
   owner: string;
@@ -157,10 +161,7 @@ export function defaultImpelEveChannel({
     },
     metadata(state) {
       return {
-        orgId: state.runContext?.orgId,
-        runId: state.runContext?.runId,
-        traceId: state.runContext?.traceId,
-        repos: state.runContext?.repos,
+        ...(state.runContext ?? {}),
         workspacePrepared: state.workspace.prepared,
       };
     },
@@ -265,20 +266,18 @@ function toClientContextMessage(value: string): string {
   return `Client context:\n${value}`;
 }
 
-async function prepareImpelEveWorkspace(
+export async function prepareImpelEveWorkspace(
   state: ImpelEveChannelState,
-  options: {
-    checkoutDepth: number;
-    getSandbox: () => Promise<SandboxSession>;
-  },
+  options: PrepareImpelEveWorkspaceOptions,
 ): Promise<void> {
   const runContext = state.runContext;
   if (!runContext?.repos?.length) return;
 
   const sandbox = await options.getSandbox();
   const checkoutPlan = createWorkspaceCheckoutPlan(runContext.repos);
+  const checkoutDepth = options.checkoutDepth ?? readCheckoutDepthFromEnv();
   const workspaceKey = createWorkspaceKey(runContext, {
-    checkoutDepth: options.checkoutDepth,
+    checkoutDepth,
     layout: checkoutPlan.layout,
     repos: checkoutPlan.repos,
   });
@@ -299,7 +298,7 @@ async function prepareImpelEveWorkspace(
     const prepared: ImpelPreparedRepo[] = [];
     for (const planned of checkoutPlan.repos) {
       const checkout = await checkoutGitHubRepository(sandbox, planned.repoRef, {
-        depth: options.checkoutDepth,
+        depth: checkoutDepth,
         path: planned.path,
         ref: runContext.branch ?? "HEAD",
       });

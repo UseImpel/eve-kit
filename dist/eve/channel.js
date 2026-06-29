@@ -23,10 +23,7 @@ export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_U
         },
         metadata(state) {
             return {
-                orgId: state.runContext?.orgId,
-                runId: state.runContext?.runId,
-                traceId: state.runContext?.traceId,
-                repos: state.runContext?.repos,
+                ...(state.runContext ?? {}),
                 workspacePrepared: state.workspace.prepared,
             };
         },
@@ -115,14 +112,15 @@ export function normalizeClientContextMessages(value) {
 function toClientContextMessage(value) {
     return `Client context:\n${value}`;
 }
-async function prepareImpelEveWorkspace(state, options) {
+export async function prepareImpelEveWorkspace(state, options) {
     const runContext = state.runContext;
     if (!runContext?.repos?.length)
         return;
     const sandbox = await options.getSandbox();
     const checkoutPlan = createWorkspaceCheckoutPlan(runContext.repos);
+    const checkoutDepth = options.checkoutDepth ?? readCheckoutDepthFromEnv();
     const workspaceKey = createWorkspaceKey(runContext, {
-        checkoutDepth: options.checkoutDepth,
+        checkoutDepth,
         layout: checkoutPlan.layout,
         repos: checkoutPlan.repos,
     });
@@ -139,7 +137,7 @@ async function prepareImpelEveWorkspace(state, options) {
         const prepared = [];
         for (const planned of checkoutPlan.repos) {
             const checkout = await checkoutGitHubRepository(sandbox, planned.repoRef, {
-                depth: options.checkoutDepth,
+                depth: checkoutDepth,
                 path: planned.path,
                 ref: runContext.branch ?? "HEAD",
             });

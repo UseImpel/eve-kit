@@ -1,4 +1,5 @@
 import { type Channel } from "eve/channels";
+import type { SandboxSession } from "eve/sandbox";
 export interface DefaultImpelEveChannelOptions {
     basicUser?: string;
     basicPassword?: string;
@@ -40,18 +41,20 @@ export interface ImpelEveChannelState {
         error: string | null;
     };
 }
-export type ImpelEveChannel = Channel<ImpelEveChannelState, Record<string, never>, {
-    orgId?: string;
-    runId?: string;
-    traceId?: string;
-    repos?: string[];
+export type ImpelEveChannel = Channel<ImpelEveChannelState, Record<string, never>, ImpelEveChannelMetadata>;
+export type ImpelEveChannelMetadata = Record<string, unknown> & ImpelEveRunContext & {
     workspacePrepared: boolean;
-}>;
+};
+export interface PrepareImpelEveWorkspaceOptions {
+    checkoutDepth?: number;
+    getSandbox: () => Promise<SandboxSession>;
+}
 export declare function defaultImpelEveChannel({ basicUser, basicPassword, includePlaceholderAuth, prepareAttachedRepos, checkoutDepth, trustedVercelSubjects, }?: DefaultImpelEveChannelOptions): ImpelEveChannel;
 export declare function createImpelEveChannelState(runContext: ImpelEveRunContext | null): ImpelEveChannelState;
 export declare function extractImpelEveRunContextFromRequest(request: Request): Promise<ImpelEveRunContext | null>;
 export declare function normalizeImpelEveRunContext(value: unknown): ImpelEveRunContext | null;
 export declare function normalizeClientContextMessages(value: unknown): string[] | undefined;
+export declare function prepareImpelEveWorkspace(state: ImpelEveChannelState, options: PrepareImpelEveWorkspaceOptions): Promise<void>;
 export declare function planImpelEveRepoCheckouts(repoNames: readonly string[]): ImpelPlannedRepoCheckout[];
 export declare function createImpelWorkspaceContextMessage(runContext: ImpelEveRunContext | null): string | undefined;
 export declare function resolveVercelConnectGitHubConnectorUid(value?: string | undefined): string;

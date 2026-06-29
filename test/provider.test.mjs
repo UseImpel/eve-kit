@@ -260,6 +260,32 @@ test("default Impel Eve channel is stateful for workspace preparation", () => {
   assert.deepEqual(channel.adapter.state, createImpelEveChannelState(null));
 });
 
+test("Impel Eve channel metadata forwards checkout context to subagents", () => {
+  const channel = defaultImpelEveChannel();
+  const state = createImpelEveChannelState({
+    orgId: "impel",
+    repos: ["UseImpel/next"],
+    branch: "feature/subagent-workspace",
+    installationId: 12345,
+    runId: "run_123",
+    traceId: "trace_123",
+    agent: { agentId: "research-agent" },
+    btParent: "00-parent",
+  });
+
+  assert.deepEqual(channel.adapter.instrumentation?.metadata?.(state), {
+    orgId: "impel",
+    repos: ["UseImpel/next"],
+    branch: "feature/subagent-workspace",
+    installationId: 12345,
+    runId: "run_123",
+    traceId: "trace_123",
+    agent: { agentId: "research-agent" },
+    btParent: "00-parent",
+    workspacePrepared: false,
+  });
+});
+
 test("default Impel Eve channel accepts explicit trusted Vercel subjects", () => {
   const channel = defaultImpelEveChannel({
     trustedVercelSubjects: [
