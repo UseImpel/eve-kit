@@ -1,7 +1,4 @@
-import {
-  parseJsonEventStream,
-  type ParseResult,
-} from "@ai-sdk/provider-utils";
+import { parseJsonEventStream, type ParseResult } from "@ai-sdk/provider-utils";
 import { z } from "zod";
 import type {
   LanguageModelV3,
@@ -18,14 +15,14 @@ export interface ImpelInferenceRunContext {
   repos?: string[];
   branch?: string;
   installationId?: string | number;
+  githubConnectorUid?: string;
   runId?: string;
   traceId?: string;
   agent?: Record<string, unknown>;
 }
 
 export type ImpelInferenceHeaders =
-  | HeadersInit
-  | (() => HeadersInit | Promise<HeadersInit>);
+  HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
 
 export type ImpelInferenceRunContextProvider =
   | ImpelInferenceRunContext
@@ -90,10 +87,7 @@ function envNumber(name: string, fallback: number): number {
 
 function redactString(value: string): string {
   return value
-    .replace(
-      /(https?:\/\/)(x-access-token:)[^@\s/]+@/gi,
-      "$1$2<redacted>@",
-    )
+    .replace(/(https?:\/\/)(x-access-token:)[^@\s/]+@/gi, "$1$2<redacted>@")
     .replace(/(x-access-token:)[^@\s]+@/gi, "$1<redacted>@")
     .replace(
       /(https?:\/\/)[^/\s:@]+:[^@\s/]+@github\.com/gi,
@@ -120,10 +114,7 @@ function redactSecrets(
   if (value instanceof Error) {
     const cause =
       "cause" in value
-        ? redactSecrets(
-            (value as Error & { cause?: unknown }).cause,
-            seen,
-          )
+        ? redactSecrets((value as Error & { cause?: unknown }).cause, seen)
         : undefined;
     const error =
       cause === undefined
@@ -180,9 +171,7 @@ function stringField(
   key: string,
 ): string | undefined {
   const field = value[key];
-  return typeof field === "string" && field.trim() !== ""
-    ? field
-    : undefined;
+  return typeof field === "string" && field.trim() !== "" ? field : undefined;
 }
 
 function errorMessageFromValue(value: unknown, fallback: string): string {
@@ -224,9 +213,7 @@ function errorMessageFromValue(value: unknown, fallback: string): string {
       return name ? `${name}: ${responseText}` : responseText;
     }
 
-    const keys = Object.keys(record).filter(
-      (key) => record[key] !== undefined,
-    );
+    const keys = Object.keys(record).filter((key) => record[key] !== undefined);
     if (name && keys.length === 1) return name;
 
     const json = safeJsonStringify(value);
@@ -575,12 +562,9 @@ function isTransientProviderError({
 }
 
 function isUserVisibleStreamPart(part: LanguageModelV3StreamPart): boolean {
-  return ![
-    "stream-start",
-    "response-metadata",
-    "finish",
-    "error",
-  ].includes(part.type);
+  return !["stream-start", "response-metadata", "finish", "error"].includes(
+    part.type,
+  );
 }
 
 function errorPart(message: string): LanguageModelV3StreamPart {
@@ -625,6 +609,10 @@ function normalizeRunContext(
           Number.isFinite(obj.installationId)
         ? String(obj.installationId)
         : undefined;
+  const githubConnectorUid =
+    typeof obj.githubConnectorUid === "string"
+      ? obj.githubConnectorUid
+      : undefined;
   const runId = typeof obj.runId === "string" ? obj.runId : undefined;
   const traceId = typeof obj.traceId === "string" ? obj.traceId : undefined;
   const agent =
@@ -636,10 +624,20 @@ function normalizeRunContext(
     repos !== undefined ||
     branch !== undefined ||
     installationId !== undefined ||
+    githubConnectorUid !== undefined ||
     runId !== undefined ||
     traceId !== undefined ||
     agent !== undefined
-    ? { orgId, repos, branch, installationId, runId, traceId, agent }
+    ? {
+        orgId,
+        repos,
+        branch,
+        installationId,
+        githubConnectorUid,
+        runId,
+        traceId,
+        agent,
+      }
     : null;
 }
 
@@ -789,6 +787,10 @@ export function impelInference(
       promptRunContext?.installationId ??
       configuredRunContext?.installationId ??
       fallbackRunContext.installationId;
+    const githubConnectorUid =
+      promptRunContext?.githubConnectorUid ??
+      configuredRunContext?.githubConnectorUid ??
+      fallbackRunContext.githubConnectorUid;
     const runId =
       promptRunContext?.runId ??
       configuredRunContext?.runId ??
@@ -813,6 +815,7 @@ export function impelInference(
       repos,
       branch,
       installationId,
+      githubConnectorUid,
       trace: traceId
         ? {
             traceId,
@@ -857,8 +860,7 @@ export function impelInference(
     );
 
     let upstreamReader:
-      | ReadableStreamDefaultReader<ParseResult<ParsedStreamPart>>
-      | undefined;
+      ReadableStreamDefaultReader<ParseResult<ParsedStreamPart>> | undefined;
 
     const stream = new ReadableStream<LanguageModelV3StreamPart>({
       start(controller) {

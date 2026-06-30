@@ -4,6 +4,7 @@ export interface ImpelInferenceRunContext {
     repos?: string[];
     branch?: string;
     installationId?: string | number;
+    githubConnectorUid?: string;
     runId?: string;
     traceId?: string;
     agent?: Record<string, unknown>;
