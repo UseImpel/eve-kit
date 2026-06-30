@@ -1,6 +1,6 @@
 {
   "name": "@useimpel/eve-kit",
-  "version": "0.2.34",
+  "version": "0.2.35",
   "description": "Eve helpers and AI SDK provider for Impel's durable inference service.",
   "type": "module",
   "repository": {
@@ -55,6 +55,10 @@
     "./eve/bridge": {
       "types": "./dist/eve/bridge.d.ts",
       "import": "./dist/eve/bridge.js"
+    },
+    "./eve/telegram": {
+      "types": "./dist/eve/telegram.d.ts",
+      "import": "./dist/eve/telegram.js"
     },
     "./retrieval": {
       "types": "./dist/retrieval/index.d.ts",
