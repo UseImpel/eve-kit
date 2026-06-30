@@ -33,6 +33,7 @@ export interface ImpelEveRunContext {
   repos?: string[];
   branch?: string;
   installationId?: string | number;
+  githubConnectorUid?: string;
   runId?: string;
   traceId?: string;
   agent?: Record<string, unknown>;
@@ -119,9 +120,10 @@ const EVE_SESSION_ID_HEADER = "x-eve-session-id";
 const EVE_MESSAGE_STREAM_CONTENT_TYPE = "application/x-ndjson; charset=utf-8";
 
 export function defaultImpelEveChannel({
-  basicUser = process.env.EVE_APP_BASIC_USER ?? process.env.IMPEL_EVE_BASIC_USER,
-  basicPassword =
-    process.env.EVE_APP_BASIC_PASSWORD ?? process.env.IMPEL_EVE_BASIC_PASSWORD,
+  basicUser = process.env.EVE_APP_BASIC_USER ??
+    process.env.IMPEL_EVE_BASIC_USER,
+  basicPassword = process.env.EVE_APP_BASIC_PASSWORD ??
+    process.env.IMPEL_EVE_BASIC_PASSWORD,
   includePlaceholderAuth = false,
   prepareAttachedRepos = true,
   checkoutDepth = readCheckoutDepthFromEnv(),
@@ -231,6 +233,7 @@ export function normalizeImpelEveRunContext(
       typeof value.installationId === "number"
         ? value.installationId
         : undefined,
+    githubConnectorUid: readString(value.githubConnectorUid),
     runId: readString(value.runId),
     traceId: readString(value.traceId),
     agent: isRecord(value.agent) ? value.agent : undefined,
@@ -259,7 +262,9 @@ export function normalizeClientContextMessages(
       "Expected 'clientContext' to be a string, string array, or JSON object.",
     );
   }
-  return [toClientContextMessage(JSON.stringify(assertJsonSerializable(value)))];
+  return [
+    toClientContextMessage(JSON.stringify(assertJsonSerializable(value))),
+  ];
 }
 
 function toClientContextMessage(value: string): string {
@@ -297,11 +302,15 @@ export async function prepareImpelEveWorkspace(
 
     const prepared: ImpelPreparedRepo[] = [];
     for (const planned of checkoutPlan.repos) {
-      const checkout = await checkoutGitHubRepository(sandbox, planned.repoRef, {
-        depth: checkoutDepth,
-        path: planned.path,
-        ref: runContext.branch ?? "HEAD",
-      });
+      const checkout = await checkoutGitHubRepository(
+        sandbox,
+        planned.repoRef,
+        {
+          depth: checkoutDepth,
+          path: planned.path,
+          ref: runContext.branch ?? "HEAD",
+        },
+      );
       prepared.push(checkout);
     }
 
@@ -333,9 +342,7 @@ export async function prepareImpelEveWorkspace(
   }
 }
 
-function createImpelEveRoutes(
-  auth: readonly AuthFn<Request>[],
-) {
+function createImpelEveRoutes(auth: readonly AuthFn<Request>[]) {
   return [
     POST<ImpelEveChannelState>("/eve/v1/session", async (request, args) => {
       const authorized = await routeAuth(request, auth);
@@ -479,7 +486,9 @@ type ContinueSessionBody = {
   outputSchema?: Record<string, unknown>;
 };
 
-async function parseJsonBody(request: Request): Promise<Record<string, unknown> | Response> {
+async function parseJsonBody(
+  request: Request,
+): Promise<Record<string, unknown> | Response> {
   let body: unknown;
   try {
     body = await request.json();
@@ -521,7 +530,8 @@ function parseContinueSessionBody(
   body: Record<string, unknown>,
 ): ContinueSessionBody | Response {
   const continuationToken =
-    typeof body.continuationToken === "string" && body.continuationToken.length > 0
+    typeof body.continuationToken === "string" &&
+    body.continuationToken.length > 0
       ? body.continuationToken
       : undefined;
   if (!continuationToken) {
@@ -557,7 +567,9 @@ function parseContinueSessionBody(
   });
 }
 
-function parseMessageField(value: unknown): string | UserContent | undefined | Response {
+function parseMessageField(
+  value: unknown,
+): string | UserContent | undefined | Response {
   if (value === undefined) return undefined;
   if (typeof value === "string") return value.length > 0 ? value : undefined;
   if (!Array.isArray(value)) {
@@ -570,11 +582,19 @@ function parseMessageField(value: unknown): string | UserContent | undefined | R
   return value as UserContent;
 }
 
-function parseClientContextField(value: unknown): string[] | undefined | Response {
+function parseClientContextField(
+  value: unknown,
+): string[] | undefined | Response {
   try {
-    return withWorkspaceContextMessages(value, normalizeClientContextMessages(value));
+    return withWorkspaceContextMessages(
+      value,
+      normalizeClientContextMessages(value),
+    );
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : String(error), 400);
+    return jsonError(
+      error instanceof Error ? error.message : String(error),
+      400,
+    );
   }
 }
 
@@ -612,10 +632,15 @@ function parseInputResponsesField(
   return value;
 }
 
-function parseModeField(value: unknown): "conversation" | "task" | undefined | Response {
+function parseModeField(
+  value: unknown,
+): "conversation" | "task" | undefined | Response {
   if (value === undefined) return undefined;
   if (value === "conversation" || value === "task") return value;
-  return jsonError("Expected 'mode' to be either 'conversation' or 'task'.", 400);
+  return jsonError(
+    "Expected 'mode' to be either 'conversation' or 'task'.",
+    400,
+  );
 }
 
 function parseOutputSchemaField(
@@ -628,7 +653,10 @@ function parseOutputSchemaField(
   try {
     return assertJsonSerializable(value);
   } catch (error) {
-    return jsonError(error instanceof Error ? error.message : String(error), 400);
+    return jsonError(
+      error instanceof Error ? error.message : String(error),
+      400,
+    );
   }
 }
 
@@ -698,7 +726,9 @@ function jsonError(error: string, status: number): Response {
   );
 }
 
-function assertJsonSerializable(value: Record<string, unknown>): Record<string, unknown> {
+function assertJsonSerializable(
+  value: Record<string, unknown>,
+): Record<string, unknown> {
   return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 }
 
@@ -767,7 +797,9 @@ function createWorkspaceCheckoutPlan(
   };
 }
 
-function countRepoNames(repoRefs: readonly GitHubRepoRef[]): Map<string, number> {
+function countRepoNames(
+  repoRefs: readonly GitHubRepoRef[],
+): Map<string, number> {
   const counts = new Map<string, number>();
   for (const repo of repoRefs) {
     counts.set(repo.repo, (counts.get(repo.repo) ?? 0) + 1);
@@ -855,7 +887,11 @@ async function checkoutGitHubRepository(
     "configure git safe directory",
     `git config --global --add safe.directory ${shellQuote(path)} || true`,
   );
-  await runSandboxCommand(sandbox, "initialize git repository", `cd ${shellQuote(path)} && git init`);
+  await runSandboxCommand(
+    sandbox,
+    "initialize git repository",
+    `cd ${shellQuote(path)} && git init`,
+  );
   await runSandboxCommand(
     sandbox,
     "reset git remote",
@@ -934,13 +970,18 @@ async function writeWorkspaceMetadata(
       ? "/workspace is a coordination directory, not a git checkout. Run git commands inside one of the repo directories below."
       : "/workspace is the attached git checkout.",
     "",
-    ...repos.map((repo, index) =>
-      `- ${index === 0 ? "Primary" : "Additional"} repo ${repo.repo} at ${repo.path} (${repo.sha})`,
+    ...repos.map(
+      (repo, index) =>
+        `- ${index === 0 ? "Primary" : "Additional"} repo ${repo.repo} at ${repo.path} (${repo.sha})`,
     ),
     "",
   ];
 
-  await runSandboxCommand(sandbox, "create metadata directory", "mkdir -p /workspace/.impel");
+  await runSandboxCommand(
+    sandbox,
+    "create metadata directory",
+    "mkdir -p /workspace/.impel",
+  );
   await sandbox.writeTextFile({
     path: "/workspace/.impel/run-context.json",
     content: JSON.stringify(metadata, null, 2),
@@ -972,9 +1013,7 @@ async function runSandboxCommand(
   );
 }
 
-function buildGitHubBrokerNetworkPolicy(
-  token: string,
-): SandboxNetworkPolicy {
+function buildGitHubBrokerNetworkPolicy(token: string): SandboxNetworkPolicy {
   const basic = `Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
   const bearer = `Bearer ${token}`;
   return {
@@ -1019,7 +1058,8 @@ async function resolveVercelConnectGitHubToken(
 
   let connect: VercelConnectModule | null;
   try {
-    connect = (await import("@vercel/connect")) as unknown as VercelConnectModule;
+    connect =
+      (await import("@vercel/connect")) as unknown as VercelConnectModule;
   } catch {
     return null;
   }
@@ -1027,7 +1067,7 @@ async function resolveVercelConnectGitHubToken(
 
   try {
     const response = await connect.getTokenResponse(
-      resolveVercelConnectGitHubConnectorUid(),
+      resolveVercelConnectGitHubConnectorUid(runContext.githubConnectorUid),
       createVercelConnectGitHubTokenParams(runContext),
     );
     return typeof response.token === "string" ? response.token : null;
@@ -1132,7 +1172,9 @@ async function createGitHubInstallationToken(
     );
   }
   if (!isRecord(body) || typeof body.token !== "string") {
-    throw new Error("GitHub installation token response did not include a token.");
+    throw new Error(
+      "GitHub installation token response did not include a token.",
+    );
   }
 
   const token = body.token;
@@ -1182,15 +1224,17 @@ function normalizePrivateKey(value: string): string {
 function hasGitHubAppFallbackEnv(): boolean {
   return Boolean(
     (process.env.IMPEL_EVE_GITHUB_APP_ID ?? process.env.GITHUB_APP_ID) &&
-      (process.env.IMPEL_EVE_GITHUB_APP_PRIVATE_KEY ??
-        process.env.GITHUB_APP_PRIVATE_KEY),
+    (process.env.IMPEL_EVE_GITHUB_APP_PRIVATE_KEY ??
+      process.env.GITHUB_APP_PRIVATE_KEY),
   );
 }
 
 function parseGitHubRepo(value: string): GitHubRepoRef {
   const [owner, repo, ...rest] = value.split("/");
   if (!owner || !repo || rest.length > 0) {
-    throw new Error(`Invalid GitHub repository name "${value}". Expected owner/repo.`);
+    throw new Error(
+      `Invalid GitHub repository name "${value}". Expected owner/repo.`,
+    );
   }
   return { owner, repo, fullName: `${owner}/${repo}` };
 }

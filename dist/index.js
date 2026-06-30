@@ -1,4 +1,4 @@
-import { parseJsonEventStream, } from "@ai-sdk/provider-utils";
+import { parseJsonEventStream } from "@ai-sdk/provider-utils";
 import { z } from "zod";
 const streamPartSchema = z.object({ type: z.string() }).passthrough();
 const errorSchema = z
@@ -70,9 +70,7 @@ function safeJsonStringify(value) {
 }
 function stringField(value, key) {
     const field = value[key];
-    return typeof field === "string" && field.trim() !== ""
-        ? field
-        : undefined;
+    return typeof field === "string" && field.trim() !== "" ? field : undefined;
 }
 function errorMessageFromValue(value, fallback) {
     if (value instanceof Error) {
@@ -367,12 +365,7 @@ function isTransientProviderError({ error, heldText, }) {
         /\b(?:econnreset|etimedout|timeout)\b/i.test(text));
 }
 function isUserVisibleStreamPart(part) {
-    return ![
-        "stream-start",
-        "response-metadata",
-        "finish",
-        "error",
-    ].includes(part.type);
+    return !["stream-start", "response-metadata", "finish", "error"].includes(part.type);
 }
 function errorPart(message) {
     return { type: "error", error: new Error(redactString(message)) };
@@ -411,6 +404,9 @@ function normalizeRunContext(obj) {
             Number.isFinite(obj.installationId)
             ? String(obj.installationId)
             : undefined;
+    const githubConnectorUid = typeof obj.githubConnectorUid === "string"
+        ? obj.githubConnectorUid
+        : undefined;
     const runId = typeof obj.runId === "string" ? obj.runId : undefined;
     const traceId = typeof obj.traceId === "string" ? obj.traceId : undefined;
     const agent = obj.agent && typeof obj.agent === "object"
@@ -420,10 +416,20 @@ function normalizeRunContext(obj) {
         repos !== undefined ||
         branch !== undefined ||
         installationId !== undefined ||
+        githubConnectorUid !== undefined ||
         runId !== undefined ||
         traceId !== undefined ||
         agent !== undefined
-        ? { orgId, repos, branch, installationId, runId, traceId, agent }
+        ? {
+            orgId,
+            repos,
+            branch,
+            installationId,
+            githubConnectorUid,
+            runId,
+            traceId,
+            agent,
+        }
         : null;
 }
 function extractRunContextFromPrompt(prompt) {
@@ -526,6 +532,9 @@ export function impelInference(modelId, opts) {
         const installationId = promptRunContext?.installationId ??
             configuredRunContext?.installationId ??
             fallbackRunContext.installationId;
+        const githubConnectorUid = promptRunContext?.githubConnectorUid ??
+            configuredRunContext?.githubConnectorUid ??
+            fallbackRunContext.githubConnectorUid;
         const runId = promptRunContext?.runId ??
             configuredRunContext?.runId ??
             fallbackRunContext.runId;
@@ -546,6 +555,7 @@ export function impelInference(modelId, opts) {
             repos,
             branch,
             installationId,
+            githubConnectorUid,
             trace: traceId
                 ? {
                     traceId,

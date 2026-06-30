@@ -13,6 +13,7 @@ export interface ImpelEveRunContext {
     repos?: string[];
     branch?: string;
     installationId?: string | number;
+    githubConnectorUid?: string;
     runId?: string;
     traceId?: string;
     agent?: Record<string, unknown>;

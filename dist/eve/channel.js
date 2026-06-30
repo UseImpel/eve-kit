@@ -4,7 +4,9 @@ import { httpBasic, localDev, placeholderAuth, routeAuth, vercelOidc, } from "ev
 const DEFAULT_GITHUB_CONNECTOR_UID = "github/useimpel-github";
 const EVE_SESSION_ID_HEADER = "x-eve-session-id";
 const EVE_MESSAGE_STREAM_CONTENT_TYPE = "application/x-ndjson; charset=utf-8";
-export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_USER ?? process.env.IMPEL_EVE_BASIC_USER, basicPassword = process.env.EVE_APP_BASIC_PASSWORD ?? process.env.IMPEL_EVE_BASIC_PASSWORD, includePlaceholderAuth = false, prepareAttachedRepos = true, checkoutDepth = readCheckoutDepthFromEnv(), trustedVercelSubjects, } = {}) {
+export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_USER ??
+    process.env.IMPEL_EVE_BASIC_USER, basicPassword = process.env.EVE_APP_BASIC_PASSWORD ??
+    process.env.IMPEL_EVE_BASIC_PASSWORD, includePlaceholderAuth = false, prepareAttachedRepos = true, checkoutDepth = readCheckoutDepthFromEnv(), trustedVercelSubjects, } = {}) {
     const basic = basicUser && basicPassword
         ? [httpBasic({ username: basicUser, password: basicPassword })]
         : [];
@@ -84,6 +86,7 @@ export function normalizeImpelEveRunContext(value) {
             typeof value.installationId === "number"
             ? value.installationId
             : undefined,
+        githubConnectorUid: readString(value.githubConnectorUid),
         runId: readString(value.runId),
         traceId: readString(value.traceId),
         agent: isRecord(value.agent) ? value.agent : undefined,
@@ -107,7 +110,9 @@ export function normalizeClientContextMessages(value) {
     if (!isRecord(value)) {
         throw new Error("Expected 'clientContext' to be a string, string array, or JSON object.");
     }
-    return [toClientContextMessage(JSON.stringify(assertJsonSerializable(value)))];
+    return [
+        toClientContextMessage(JSON.stringify(assertJsonSerializable(value))),
+    ];
 }
 function toClientContextMessage(value) {
     return `Client context:\n${value}`;
@@ -299,7 +304,8 @@ function parseCreateSessionBody(body) {
     });
 }
 function parseContinueSessionBody(body) {
-    const continuationToken = typeof body.continuationToken === "string" && body.continuationToken.length > 0
+    const continuationToken = typeof body.continuationToken === "string" &&
+        body.continuationToken.length > 0
         ? body.continuationToken
         : undefined;
     if (!continuationToken) {
@@ -637,7 +643,8 @@ async function resolveVercelConnectGitHubToken(runContext) {
         return null;
     let connect;
     try {
-        connect = (await import("@vercel/connect"));
+        connect =
+            (await import("@vercel/connect"));
     }
     catch {
         return null;
@@ -645,7 +652,7 @@ async function resolveVercelConnectGitHubToken(runContext) {
     if (!connect)
         return null;
     try {
-        const response = await connect.getTokenResponse(resolveVercelConnectGitHubConnectorUid(), createVercelConnectGitHubTokenParams(runContext));
+        const response = await connect.getTokenResponse(resolveVercelConnectGitHubConnectorUid(runContext.githubConnectorUid), createVercelConnectGitHubTokenParams(runContext));
         return typeof response.token === "string" ? response.token : null;
     }
     catch (error) {
