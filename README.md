@@ -10,7 +10,7 @@ the normal Eve filesystem layout: `agent.ts`, `channels/`, `sandbox/`,
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.16.tar.gz
+npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.40.tar.gz
 ```
 
 ## Eve Usage
