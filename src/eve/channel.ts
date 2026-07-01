@@ -410,10 +410,10 @@ async function prepareReferenceRepoAccess(
       ...runContext,
       repos: referenceRepos,
     };
-    const token = await resolveGitHubAccessToken(
-      referenceRunContext,
-      githubRepositoryNamesFromRunContext(referenceRunContext),
-    );
+    const token = await resolveGitHubAccessToken(referenceRunContext, {
+      scopeRepositories: githubRepositoryNamesFromRunContext(referenceRunContext),
+      readOnly: true,
+    });
     await sandbox.setNetworkPolicy(buildGitHubBrokerNetworkPolicy(token));
     await configureGitHubCliAuthMarker(sandbox);
     state.workspace = {
@@ -1128,24 +1128,46 @@ function buildGitHubBrokerNetworkPolicy(token: string): SandboxNetworkPolicy {
   };
 }
 
+// Read-only permission set for brokered reference-repo access, expressed in both
+// the Vercel Connect (array) and GitHub installation-token API (object) shapes.
+const REFERENCE_REPO_CONNECT_PERMISSIONS = [
+  "contents:read",
+  "metadata:read",
+] as const;
+const REFERENCE_REPO_INSTALLATION_PERMISSIONS = {
+  contents: "read",
+  metadata: "read",
+} as const;
+
+interface ResolveGitHubAccessTokenOptions {
+  scopeRepositories?: readonly string[];
+  readOnly?: boolean;
+}
+
 async function resolveGitHubAccessToken(
   runContext: ImpelEveRunContext,
-  scopeRepositories?: readonly string[],
+  options: ResolveGitHubAccessTokenOptions = {},
 ): Promise<string> {
+  const { scopeRepositories, readOnly = false } = options;
   const staticToken =
     process.env.IMPEL_EVE_GITHUB_TOKEN ??
     process.env.GITHUB_TOKEN ??
     process.env.GH_TOKEN;
   if (staticToken) return staticToken;
 
-  const connectToken = await resolveVercelConnectGitHubToken(runContext);
+  const connectToken = await resolveVercelConnectGitHubToken(
+    runContext,
+    readOnly,
+  );
   if (connectToken) return connectToken;
 
   if (runContext.installationId !== undefined) {
-    return createGitHubInstallationToken(
-      String(runContext.installationId),
-      scopeRepositories,
-    );
+    return createGitHubInstallationToken(String(runContext.installationId), {
+      repositories: scopeRepositories,
+      permissions: readOnly
+        ? REFERENCE_REPO_INSTALLATION_PERMISSIONS
+        : undefined,
+    });
   }
 
   throw new Error(
@@ -1155,6 +1177,7 @@ async function resolveGitHubAccessToken(
 
 async function resolveVercelConnectGitHubToken(
   runContext: ImpelEveRunContext,
+  readOnly = false,
 ): Promise<string | null> {
   if (process.env.IMPEL_EVE_GITHUB_CONNECT_ENABLED === "0") return null;
 
@@ -1170,7 +1193,7 @@ async function resolveVercelConnectGitHubToken(
   try {
     const response = await connect.getTokenResponse(
       resolveVercelConnectGitHubConnectorUid(runContext.githubConnectorUid),
-      createVercelConnectGitHubTokenParams(runContext),
+      createVercelConnectGitHubTokenParams(runContext, readOnly),
     );
     return typeof response.token === "string" ? response.token : null;
   } catch (error) {
@@ -1190,8 +1213,12 @@ export function resolveVercelConnectGitHubConnectorUid(
 
 export function createVercelConnectGitHubTokenParams(
   runContext: ImpelEveRunContext,
+  readOnly = false,
 ): Record<string, unknown> {
   const repositoryNames = githubRepositoryNamesFromRunContext(runContext);
+  const permissions = readOnly
+    ? [...REFERENCE_REPO_CONNECT_PERMISSIONS]
+    : ["contents:write", "pull_requests:write", "checks:read", "statuses:read"];
 
   return stripUndefined({
     subject: { type: "app" },
@@ -1208,12 +1235,7 @@ export function createVercelConnectGitHubTokenParams(
                 repositoryNames.length === 1
                   ? repositoryNames[0]
                   : repositoryNames,
-              permissions: [
-                "contents:write",
-                "pull_requests:write",
-                "checks:read",
-                "statuses:read",
-              ],
+              permissions,
             },
           ]
         : undefined,
@@ -1232,10 +1254,16 @@ function githubRepositoryNamesFromRunContext(
 
 const githubInstallationTokenCache = new Map<string, GitHubInstallationToken>();
 
+interface CreateGitHubInstallationTokenOptions {
+  repositories?: readonly string[];
+  permissions?: Readonly<Record<string, string>>;
+}
+
 async function createGitHubInstallationToken(
   installationId: string,
-  repositories?: readonly string[],
+  options: CreateGitHubInstallationTokenOptions = {},
 ): Promise<string> {
+  const { repositories, permissions } = options;
   const apiBaseUrl =
     process.env.IMPEL_EVE_GITHUB_API_URL ?? "https://api.github.com";
   const appId =
@@ -1250,19 +1278,33 @@ async function createGitHubInstallationToken(
     );
   }
 
-  // Optionally scope the token to specific repositories (least privilege). The
-  // GitHub API expects bare repo names (no owner); an empty list means the token
-  // covers the whole installation, preserving the historical unscoped behavior.
+  // Optionally scope the token to specific repositories and/or reduced
+  // permissions (least privilege). The GitHub API expects bare repo names (no
+  // owner); an empty list means the token covers the whole installation,
+  // preserving the historical unscoped behavior.
   const scope = (repositories ?? [])
     .map((name) => name.trim())
     .filter((name) => name.length > 0)
     .sort();
-  const cacheKey = `${apiBaseUrl}:${appId}:${installationId}:${scope.join(",")}`;
+  const permissionKey = permissions
+    ? Object.entries(permissions)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, value]) => `${key}=${value}`)
+        .join(",")
+    : "";
+  const cacheKey = `${apiBaseUrl}:${appId}:${installationId}:${scope.join(",")}:${permissionKey}`;
   const cached = githubInstallationTokenCache.get(cacheKey);
   if (cached && Date.now() < cached.expiresAtMs - 60_000) {
     return cached.token;
   }
 
+  const requestBody = stripUndefined({
+    repositories: scope.length > 0 ? scope : undefined,
+    permissions:
+      permissions && Object.keys(permissions).length > 0
+        ? permissions
+        : undefined,
+  });
   const jwt = createGitHubAppJwt(appId, normalizePrivateKey(privateKey));
   const response = await fetch(
     `${apiBaseUrl}/app/installations/${encodeURIComponent(installationId)}/access_tokens`,
@@ -1275,8 +1317,8 @@ async function createGitHubInstallationToken(
         "x-github-api-version": "2022-11-28",
       },
       body:
-        scope.length > 0
-          ? JSON.stringify({ repositories: scope })
+        Object.keys(requestBody).length > 0
+          ? JSON.stringify(requestBody)
           : undefined,
     },
   );
