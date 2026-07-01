@@ -23,6 +23,8 @@ export interface QueryWikiOptions {
   k?: number;
   /** Evidence gate confidence floor. Default: 0.35 */
   floor?: number;
+  /** Resolve orgId to a wiki vault path. Defaults to env map or wikis/${orgId}. */
+  vaultResolver?: WikiVaultResolver | WikiVaultMap;
 }
 
 /**
@@ -41,30 +43,52 @@ export interface QueryWikiResult {
   };
 }
 
+export interface WikiVaultLocation {
+  /** Optional connector/source repo metadata retained for callers. */
+  repo?: string;
+  /** Local vault path used by retrieval. */
+  path: string;
+}
+
+export type WikiVaultResolverResult =
+  | string
+  | WikiVaultLocation
+  | null
+  | undefined;
+
+export type WikiVaultResolver = (orgId: string) => WikiVaultResolverResult;
+
+export type WikiVaultMap = Readonly<Record<string, string | WikiVaultLocation>>;
+
+export interface ResolveWikiVaultOptions {
+  env?: NodeJS.ProcessEnv;
+  vaultResolver?: WikiVaultResolver | WikiVaultMap;
+}
+
 /**
  * Resolve an orgId to its wiki vault path.
  *
- * For T1 (CFM Slack bot), we hardcode known orgs. In production,
- * this will call a connector layer to resolve the wiki path from
- * GitHub connectors or environment configuration.
+ * Resolution order:
+ * 1. Injected resolver function or config map.
+ * 2. JSON object from IMPEL_WIKI_VAULT_MAP.
+ * 3. Documented convention fallback: wikis/${orgId}.
  */
-export function resolveWikiVault(orgId: string): string {
-  // Map org IDs to their wiki vault paths.
-  // For now, we use environment overrides or hardcoded paths.
-  // In production, this calls the Impel ingestion connector layer.
-  const vaultMap: Record<string, string> = {
-    cfm: process.env.WIKI_VAULT_CFM || "wikis/cfm",
-    default: process.env.WIKI_VAULT_DEFAULT || "wikis/default",
-  };
+export function resolveWikiVault(orgId: string): string;
+export function resolveWikiVault(
+  orgId: string,
+  options: ResolveWikiVaultOptions,
+): string;
+export function resolveWikiVault(
+  orgId: string,
+  options: ResolveWikiVaultOptions = {},
+): string {
+  const injected = resolveInjectedWikiVault(orgId, options.vaultResolver);
+  if (injected) return injected;
 
-  const vault = vaultMap[orgId];
-  if (!vault) {
-    throw new Error(
-      `Wiki not configured for org: ${orgId}. Available orgs: ${Object.keys(vaultMap).join(", ")}`
-    );
-  }
+  const fromEnv = resolveEnvWikiVault(orgId, options.env ?? process.env);
+  if (fromEnv) return fromEnv;
 
-  return vault;
+  return `wikis/${orgId}`;
 }
 
 /**
@@ -77,11 +101,11 @@ export function resolveWikiVault(orgId: string): string {
  * All results are tagged with orgId for observability.
  * All calls are logged to console (Eve Span context in Phase 2).
  *
- * @param orgId Organization ID (e.g., 'cfm'). Must be a known org.
- * @param query Search query (e.g., 'payroll policy')
- * @param options Optional: { k, floor }
+ * @param orgId Organization ID.
+ * @param query Search query.
+ * @param options Optional: { k, floor, vaultResolver }
  * @returns Promise<QueryWikiResult> with chunks, gate, and metadata
- * @throws Error if orgId is not configured or retrieval fails critically
+ * @throws Error if retrieval fails critically
  */
 export async function queryWiki(
   orgId: string,
@@ -92,7 +116,9 @@ export async function queryWiki(
 
   try {
     // Validate and resolve the org's wiki vault path.
-    const vault = resolveWikiVault(orgId);
+    const vault = resolveWikiVault(orgId, {
+      vaultResolver: options?.vaultResolver,
+    });
 
     // Load the pre-built wiki index for this org.
     // If the wiki doesn't exist, Retrieval.fromReleaseIndex will throw.
@@ -161,4 +187,69 @@ export async function queryWiki(
     );
     throw err;
   }
+}
+
+function resolveInjectedWikiVault(
+  orgId: string,
+  resolver?: WikiVaultResolver | WikiVaultMap,
+): string | undefined {
+  if (!resolver) return undefined;
+  const result =
+    typeof resolver === "function" ? resolver(orgId) : resolver[orgId];
+  return wikiVaultPathFromValue(result, "vaultResolver");
+}
+
+function resolveEnvWikiVault(
+  orgId: string,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const raw = env.IMPEL_WIKI_VAULT_MAP?.trim();
+  if (!raw) return undefined;
+
+  const parsed = parseWikiVaultMap(raw);
+  return wikiVaultPathFromValue(parsed[orgId], "IMPEL_WIKI_VAULT_MAP");
+}
+
+function parseWikiVaultMap(raw: string): WikiVaultMap {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `IMPEL_WIKI_VAULT_MAP must be valid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+
+  if (!isRecord(parsed)) {
+    throw new Error("IMPEL_WIKI_VAULT_MAP must be a JSON object.");
+  }
+
+  return parsed as WikiVaultMap;
+}
+
+function wikiVaultPathFromValue(
+  value: WikiVaultResolverResult,
+  source: string,
+): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value === "string") return nonEmptyString(value);
+  if (isRecord(value)) {
+    const path = nonEmptyString(value.path);
+    if (path) return path;
+  }
+  throw new Error(
+    `${source} wiki vault values must be strings or objects with a path string.`,
+  );
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null;
 }

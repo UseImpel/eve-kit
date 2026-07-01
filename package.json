@@ -1,6 +1,6 @@
 {
   "name": "@useimpel/eve-kit",
-  "version": "0.2.40",
+  "version": "0.2.41",
   "description": "Eve helpers and AI SDK provider for Impel's durable inference service.",
   "type": "module",
   "repository": {
@@ -19,6 +19,22 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./contracts/run-token": {
+      "types": "./dist/contracts/run-token.d.ts",
+      "import": "./dist/contracts/run-token.js"
+    },
+    "./contracts/eve-protocol": {
+      "types": "./dist/contracts/eve-protocol.d.ts",
+      "import": "./dist/contracts/eve-protocol.js"
+    },
+    "./contracts/inference-admin": {
+      "types": "./dist/contracts/inference-admin.d.ts",
+      "import": "./dist/contracts/inference-admin.js"
+    },
+    "./contracts/ingestion": {
+      "types": "./dist/contracts/ingestion.d.ts",
+      "import": "./dist/contracts/ingestion.js"
     },
     "./eve": {
       "types": "./dist/eve/index.d.ts",

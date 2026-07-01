@@ -1,6 +1,65 @@
 import path from "node:path";
+import { defineBashTool, defineGlobTool, defineGrepTool, defineReadFileTool, defineTool, defineWriteFileTool, } from "eve/tools";
+import { z } from "zod";
 import { createImpelEveChannelState, createImpelWorkspaceContextMessage, normalizeImpelEveRunContext, planImpelEveRepoCheckouts, prepareImpelEveWorkspace, } from "./channel.js";
 const posix = path.posix;
+/**
+ * Factory for an Eve `bash` tool that prepares the attached Impel workspace and
+ * denies commands targeting paths outside verified `/workspace` checkouts.
+ *
+ * Usage: `export default defineImpelBashTool()`.
+ */
+export function defineImpelBashTool(options = {}) {
+    return definePreparedWorkspaceTool(defineBashTool(), "bash", options);
+}
+/**
+ * Factory for an Eve `glob` tool guarded to verified Impel workspace paths.
+ *
+ * Usage: `export default defineImpelGlobTool()`.
+ */
+export function defineImpelGlobTool(options = {}) {
+    return definePreparedWorkspaceTool(defineGlobTool(), "glob", options);
+}
+/**
+ * Factory for an Eve `grep` tool guarded to verified Impel workspace paths.
+ *
+ * Usage: `export default defineImpelGrepTool()`.
+ */
+export function defineImpelGrepTool(options = {}) {
+    return definePreparedWorkspaceTool(defineGrepTool(), "grep", options);
+}
+/**
+ * Factory for an Eve `read_file` tool guarded to verified Impel workspace paths.
+ *
+ * Usage: `export default defineImpelReadFileTool()`.
+ */
+export function defineImpelReadFileTool(options = {}) {
+    return definePreparedWorkspaceTool(defineReadFileTool(), "read_file", options);
+}
+/**
+ * Factory for an Eve `write_file` tool guarded to verified Impel workspace paths.
+ *
+ * Usage: `export default defineImpelWriteFileTool()`.
+ */
+export function defineImpelWriteFileTool(options = {}) {
+    return definePreparedWorkspaceTool(defineWriteFileTool(), "write_file", options);
+}
+/**
+ * Factory for the `impel_workspace_context` tool. It prepares the attached Eve
+ * workspace and returns the verified repository checkout paths for other tools.
+ *
+ * Usage: `export default defineImpelWorkspaceContextTool()`.
+ */
+export function defineImpelWorkspaceContextTool(options = {}) {
+    return defineTool({
+        description: options.description ??
+            "Prepare the attached Eve workspace and return the verified repository checkout paths. Use this before read_file, grep, glob, bash, or write_file.",
+        inputSchema: z.object({}),
+        async execute(_input, ctx) {
+            return describePreparedImpelWorkspace(ctx);
+        },
+    });
+}
 const MAX_WORKSPACE_CACHE_ENTRIES = 500;
 const runContextsBySessionId = new Map();
 const workspaceStatesByKey = new Map();
@@ -12,6 +71,29 @@ const workspacePathReaders = {
     read_file: readFileToolWorkspacePaths,
     write_file: readFileToolWorkspacePaths,
 };
+const defaultImpelWorkspaceToolGuidance = {
+    bash: "Impel workspace wrapper: prepares attached repositories from Eve client context before execution. Do not target guessed /workspace paths; use impel_workspace_context for verified checkout paths.",
+    glob: "Impel workspace wrapper: glob only verified attached repository paths. Use impel_workspace_context before broad searches.",
+    grep: "Impel workspace wrapper: grep only verified attached repository paths. Use impel_workspace_context before broad searches.",
+    read_file: "Impel workspace wrapper: read only verified attached repository paths. Use impel_workspace_context for the checkout map.",
+    write_file: "Impel workspace wrapper: write only inside verified attached repository paths. Use impel_workspace_context for the checkout map.",
+};
+function definePreparedWorkspaceTool(tool, toolName, options) {
+    const guidance = options.description ?? defaultImpelWorkspaceToolGuidance[toolName];
+    return defineTool({
+        ...tool,
+        description: appendDescription(tool.description, guidance),
+        async execute(input, ctx) {
+            return runWithPreparedImpelWorkspace(tool, input, ctx, {
+                mode: options.mode,
+                toolName,
+            });
+        },
+    });
+}
+function appendDescription(base, extra) {
+    return extra ? [base, "", extra].join("\n") : base;
+}
 class WorkspaceToolBlockedError extends Error {
     code;
     requestedPaths;
