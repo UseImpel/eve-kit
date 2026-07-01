@@ -1,6 +1,6 @@
 {
   "name": "@useimpel/eve-kit",
-  "version": "0.2.38",
+  "version": "0.2.39",
   "description": "Eve helpers and AI SDK provider for Impel's durable inference service.",
   "type": "module",
   "repository": {
@@ -27,6 +27,14 @@
     "./eve/channel": {
       "types": "./dist/eve/channel.d.ts",
       "import": "./dist/eve/channel.js"
+    },
+    "./eve/workspace-tools": {
+      "types": "./dist/eve/workspace-tools.d.ts",
+      "import": "./dist/eve/workspace-tools.js"
+    },
+    "./eve/web-search-tool": {
+      "types": "./dist/eve/web-search-tool.d.ts",
+      "import": "./dist/eve/web-search-tool.js"
     },
     "./eve/gateway": {
       "types": "./dist/eve/gateway.d.ts",
@@ -77,9 +85,10 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@ai-sdk/xai": "^4.0.3",
     "@ai-sdk/provider-utils": "5.0.0-beta.49",
     "@vercel/connect": "0.2.2",
-    "ai": "^6.0.208",
+    "ai": "7.0.0-beta.178",
     "zod": "4.4.3"
   },
   "peerDependencies": {
