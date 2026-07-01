@@ -7,6 +7,19 @@ export interface DefaultImpelEveChannelOptions {
     prepareAttachedRepos?: boolean;
     checkoutDepth?: number;
     trustedVercelSubjects?: readonly string[];
+    /**
+     * GitHub repositories (owner/repo) to broker *read-only* authenticated
+     * network access to, even when the run has no attached workspace repos.
+     *
+     * The sandbox gets an installation token scoped to exactly these repos plus a
+     * `gh` CLI auth marker, so tools can `gh api` / `git clone` them — but nothing
+     * is checked out and general internet access is preserved. Use this to give an
+     * agent authenticated read access to a private reference source it must
+     * consult but should never modify (e.g. the eve-kit source for the Agent
+     * Creator). Best-effort: if the token can't be minted the run continues with
+     * default (open) networking and no GitHub auth.
+     */
+    referenceRepos?: readonly string[];
 }
 export interface ImpelEveRunContext {
     orgId?: string;
@@ -48,9 +61,10 @@ export type ImpelEveChannelMetadata = Record<string, unknown> & ImpelEveRunConte
 };
 export interface PrepareImpelEveWorkspaceOptions {
     checkoutDepth?: number;
+    referenceRepos?: readonly string[];
     getSandbox: () => Promise<SandboxSession>;
 }
-export declare function defaultImpelEveChannel({ basicUser, basicPassword, includePlaceholderAuth, prepareAttachedRepos, checkoutDepth, trustedVercelSubjects, }?: DefaultImpelEveChannelOptions): ImpelEveChannel;
+export declare function defaultImpelEveChannel({ basicUser, basicPassword, includePlaceholderAuth, prepareAttachedRepos, checkoutDepth, trustedVercelSubjects, referenceRepos, }?: DefaultImpelEveChannelOptions): ImpelEveChannel;
 export declare function createImpelEveChannelState(runContext: ImpelEveRunContext | null): ImpelEveChannelState;
 export declare function extractImpelEveRunContextFromRequest(request: Request): Promise<ImpelEveRunContext | null>;
 export declare function normalizeImpelEveRunContext(value: unknown): ImpelEveRunContext | null;

@@ -6,7 +6,7 @@ const EVE_SESSION_ID_HEADER = "x-eve-session-id";
 const EVE_MESSAGE_STREAM_CONTENT_TYPE = "application/x-ndjson; charset=utf-8";
 export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_USER ??
     process.env.IMPEL_EVE_BASIC_USER, basicPassword = process.env.EVE_APP_BASIC_PASSWORD ??
-    process.env.IMPEL_EVE_BASIC_PASSWORD, includePlaceholderAuth = false, prepareAttachedRepos = true, checkoutDepth = readCheckoutDepthFromEnv(), trustedVercelSubjects, } = {}) {
+    process.env.IMPEL_EVE_BASIC_PASSWORD, includePlaceholderAuth = false, prepareAttachedRepos = true, checkoutDepth = readCheckoutDepthFromEnv(), trustedVercelSubjects, referenceRepos, } = {}) {
     const basic = basicUser && basicPassword
         ? [httpBasic({ username: basicUser, password: basicPassword })]
         : [];
@@ -36,6 +36,7 @@ export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_U
                     return;
                 await prepareImpelEveWorkspace(channel.state, {
                     checkoutDepth,
+                    referenceRepos,
                     getSandbox: () => ctx.getSandbox(),
                 });
             },
@@ -119,8 +120,16 @@ function toClientContextMessage(value) {
 }
 export async function prepareImpelEveWorkspace(state, options) {
     const runContext = state.runContext;
-    if (!runContext?.repos?.length)
+    if (!runContext?.repos?.length) {
+        // No workspace repos to check out. If reference repos are configured, still
+        // broker read-only authenticated GitHub access (network policy + gh CLI
+        // marker) so tools can `gh api` / `git clone` them — without any checkout.
+        const referenceRepos = normalizeReferenceRepos(options.referenceRepos);
+        if (runContext && referenceRepos.length) {
+            await prepareReferenceRepoAccess(state, runContext, referenceRepos, options);
+        }
         return;
+    }
     const sandbox = await options.getSandbox();
     const checkoutPlan = createWorkspaceCheckoutPlan(runContext.repos);
     const checkoutDepth = options.checkoutDepth ?? readCheckoutDepthFromEnv();
@@ -169,6 +178,66 @@ export async function prepareImpelEveWorkspace(state, options) {
             error: message,
         };
         throw error;
+    }
+}
+function normalizeReferenceRepos(referenceRepos) {
+    const names = new Set();
+    for (const entry of referenceRepos ?? []) {
+        const trimmed = entry.trim();
+        if (trimmed)
+            names.add(trimmed);
+    }
+    return Array.from(names);
+}
+/**
+ * Broker read-only, authenticated GitHub access to a fixed set of reference
+ * repositories without checking anything out. Sets a network policy that injects
+ * an installation token (scoped to exactly those repos) on github.com requests
+ * while leaving all other hosts open, plus a `gh` CLI auth marker.
+ *
+ * Best-effort: any failure (missing app env, repo not in installation, etc.)
+ * is swallowed so it never fails the run — the sandbox simply keeps its default
+ * open networking and the agent falls back to whatever bundled docs it has.
+ */
+async function prepareReferenceRepoAccess(state, runContext, referenceRepos, options) {
+    const sandbox = await options.getSandbox();
+    const workspaceKey = `reference:${referenceRepos.slice().sort().join(",")}`;
+    if (state.workspace.prepared &&
+        state.workspace.sandboxId === sandbox.id &&
+        state.workspace.key === workspaceKey) {
+        return;
+    }
+    try {
+        // Scope the brokered token to the reference repos only (least privilege).
+        const referenceRunContext = {
+            ...runContext,
+            repos: referenceRepos,
+        };
+        const token = await resolveGitHubAccessToken(referenceRunContext, githubRepositoryNamesFromRunContext(referenceRunContext));
+        await sandbox.setNetworkPolicy(buildGitHubBrokerNetworkPolicy(token));
+        await configureGitHubCliAuthMarker(sandbox);
+        state.workspace = {
+            prepared: true,
+            sandboxId: sandbox.id,
+            key: workspaceKey,
+            layout: null,
+            repos: [],
+            error: null,
+        };
+    }
+    catch (error) {
+        // Reference read access is best-effort and must never fail the run. Leave
+        // the default (open) network policy in place so general internet access and
+        // the agent's own tools keep working.
+        const message = error instanceof Error ? error.message : String(error);
+        state.workspace = {
+            prepared: false,
+            sandboxId: sandbox.id,
+            key: null,
+            layout: null,
+            repos: [],
+            error: message,
+        };
     }
 }
 function createImpelEveRoutes(auth) {
@@ -624,7 +693,7 @@ function buildGitHubBrokerNetworkPolicy(token) {
         },
     };
 }
-async function resolveGitHubAccessToken(runContext) {
+async function resolveGitHubAccessToken(runContext, scopeRepositories) {
     const staticToken = process.env.IMPEL_EVE_GITHUB_TOKEN ??
         process.env.GITHUB_TOKEN ??
         process.env.GH_TOKEN;
@@ -634,7 +703,7 @@ async function resolveGitHubAccessToken(runContext) {
     if (connectToken)
         return connectToken;
     if (runContext.installationId !== undefined) {
-        return createGitHubInstallationToken(String(runContext.installationId));
+        return createGitHubInstallationToken(String(runContext.installationId), scopeRepositories);
     }
     throw new Error("Attached repo checkout requires Vercel Connect GitHub app-subject access, clientContext.installationId with GitHub App fallback env, or a static IMPEL_EVE_GITHUB_TOKEN/GITHUB_TOKEN/GH_TOKEN.");
 }
@@ -698,7 +767,7 @@ function githubRepositoryNamesFromRunContext(runContext) {
     return Array.from(names);
 }
 const githubInstallationTokenCache = new Map();
-async function createGitHubInstallationToken(installationId) {
+async function createGitHubInstallationToken(installationId, repositories) {
     const apiBaseUrl = process.env.IMPEL_EVE_GITHUB_API_URL ?? "https://api.github.com";
     const appId = process.env.IMPEL_EVE_GITHUB_APP_ID ?? process.env.GITHUB_APP_ID;
     const privateKey = process.env.IMPEL_EVE_GITHUB_APP_PRIVATE_KEY ??
@@ -706,7 +775,14 @@ async function createGitHubInstallationToken(installationId) {
     if (!appId || !privateKey) {
         throw new Error("Attached repo checkout requires Vercel Connect GitHub app-subject access, GITHUB_APP_ID/GITHUB_APP_PRIVATE_KEY, or a static IMPEL_EVE_GITHUB_TOKEN/GITHUB_TOKEN/GH_TOKEN.");
     }
-    const cacheKey = `${apiBaseUrl}:${appId}:${installationId}`;
+    // Optionally scope the token to specific repositories (least privilege). The
+    // GitHub API expects bare repo names (no owner); an empty list means the token
+    // covers the whole installation, preserving the historical unscoped behavior.
+    const scope = (repositories ?? [])
+        .map((name) => name.trim())
+        .filter((name) => name.length > 0)
+        .sort();
+    const cacheKey = `${apiBaseUrl}:${appId}:${installationId}:${scope.join(",")}`;
     const cached = githubInstallationTokenCache.get(cacheKey);
     if (cached && Date.now() < cached.expiresAtMs - 60_000) {
         return cached.token;
@@ -717,8 +793,12 @@ async function createGitHubInstallationToken(installationId) {
         headers: {
             accept: "application/vnd.github+json",
             authorization: `Bearer ${jwt}`,
+            "content-type": "application/json",
             "x-github-api-version": "2022-11-28",
         },
+        body: scope.length > 0
+            ? JSON.stringify({ repositories: scope })
+            : undefined,
     });
     const body = await parseJsonResponse(response);
     if (!response.ok) {

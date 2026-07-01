@@ -26,6 +26,19 @@ export interface DefaultImpelEveChannelOptions {
   prepareAttachedRepos?: boolean;
   checkoutDepth?: number;
   trustedVercelSubjects?: readonly string[];
+  /**
+   * GitHub repositories (owner/repo) to broker *read-only* authenticated
+   * network access to, even when the run has no attached workspace repos.
+   *
+   * The sandbox gets an installation token scoped to exactly these repos plus a
+   * `gh` CLI auth marker, so tools can `gh api` / `git clone` them — but nothing
+   * is checked out and general internet access is preserved. Use this to give an
+   * agent authenticated read access to a private reference source it must
+   * consult but should never modify (e.g. the eve-kit source for the Agent
+   * Creator). Best-effort: if the token can't be minted the run continues with
+   * default (open) networking and no GitHub auth.
+   */
+  referenceRepos?: readonly string[];
 }
 
 export interface ImpelEveRunContext {
@@ -84,6 +97,7 @@ export type ImpelEveChannelMetadata = Record<string, unknown> &
 
 export interface PrepareImpelEveWorkspaceOptions {
   checkoutDepth?: number;
+  referenceRepos?: readonly string[];
   getSandbox: () => Promise<SandboxSession>;
 }
 
@@ -128,6 +142,7 @@ export function defaultImpelEveChannel({
   prepareAttachedRepos = true,
   checkoutDepth = readCheckoutDepthFromEnv(),
   trustedVercelSubjects,
+  referenceRepos,
 }: DefaultImpelEveChannelOptions = {}): ImpelEveChannel {
   const basic =
     basicUser && basicPassword
@@ -173,6 +188,7 @@ export function defaultImpelEveChannel({
         if (!prepareAttachedRepos) return;
         await prepareImpelEveWorkspace(channel.state, {
           checkoutDepth,
+          referenceRepos,
           getSandbox: () => ctx.getSandbox(),
         });
       },
@@ -276,7 +292,16 @@ export async function prepareImpelEveWorkspace(
   options: PrepareImpelEveWorkspaceOptions,
 ): Promise<void> {
   const runContext = state.runContext;
-  if (!runContext?.repos?.length) return;
+  if (!runContext?.repos?.length) {
+    // No workspace repos to check out. If reference repos are configured, still
+    // broker read-only authenticated GitHub access (network policy + gh CLI
+    // marker) so tools can `gh api` / `git clone` them — without any checkout.
+    const referenceRepos = normalizeReferenceRepos(options.referenceRepos);
+    if (runContext && referenceRepos.length) {
+      await prepareReferenceRepoAccess(state, runContext, referenceRepos, options);
+    }
+    return;
+  }
 
   const sandbox = await options.getSandbox();
   const checkoutPlan = createWorkspaceCheckoutPlan(runContext.repos);
@@ -339,6 +364,79 @@ export async function prepareImpelEveWorkspace(
       error: message,
     };
     throw error;
+  }
+}
+
+function normalizeReferenceRepos(
+  referenceRepos: readonly string[] | undefined,
+): string[] {
+  const names = new Set<string>();
+  for (const entry of referenceRepos ?? []) {
+    const trimmed = entry.trim();
+    if (trimmed) names.add(trimmed);
+  }
+  return Array.from(names);
+}
+
+/**
+ * Broker read-only, authenticated GitHub access to a fixed set of reference
+ * repositories without checking anything out. Sets a network policy that injects
+ * an installation token (scoped to exactly those repos) on github.com requests
+ * while leaving all other hosts open, plus a `gh` CLI auth marker.
+ *
+ * Best-effort: any failure (missing app env, repo not in installation, etc.)
+ * is swallowed so it never fails the run — the sandbox simply keeps its default
+ * open networking and the agent falls back to whatever bundled docs it has.
+ */
+async function prepareReferenceRepoAccess(
+  state: ImpelEveChannelState,
+  runContext: ImpelEveRunContext,
+  referenceRepos: string[],
+  options: PrepareImpelEveWorkspaceOptions,
+): Promise<void> {
+  const sandbox = await options.getSandbox();
+  const workspaceKey = `reference:${referenceRepos.slice().sort().join(",")}`;
+  if (
+    state.workspace.prepared &&
+    state.workspace.sandboxId === sandbox.id &&
+    state.workspace.key === workspaceKey
+  ) {
+    return;
+  }
+
+  try {
+    // Scope the brokered token to the reference repos only (least privilege).
+    const referenceRunContext: ImpelEveRunContext = {
+      ...runContext,
+      repos: referenceRepos,
+    };
+    const token = await resolveGitHubAccessToken(
+      referenceRunContext,
+      githubRepositoryNamesFromRunContext(referenceRunContext),
+    );
+    await sandbox.setNetworkPolicy(buildGitHubBrokerNetworkPolicy(token));
+    await configureGitHubCliAuthMarker(sandbox);
+    state.workspace = {
+      prepared: true,
+      sandboxId: sandbox.id,
+      key: workspaceKey,
+      layout: null,
+      repos: [],
+      error: null,
+    };
+  } catch (error) {
+    // Reference read access is best-effort and must never fail the run. Leave
+    // the default (open) network policy in place so general internet access and
+    // the agent's own tools keep working.
+    const message = error instanceof Error ? error.message : String(error);
+    state.workspace = {
+      prepared: false,
+      sandboxId: sandbox.id,
+      key: null,
+      layout: null,
+      repos: [],
+      error: message,
+    };
   }
 }
 
@@ -1032,6 +1130,7 @@ function buildGitHubBrokerNetworkPolicy(token: string): SandboxNetworkPolicy {
 
 async function resolveGitHubAccessToken(
   runContext: ImpelEveRunContext,
+  scopeRepositories?: readonly string[],
 ): Promise<string> {
   const staticToken =
     process.env.IMPEL_EVE_GITHUB_TOKEN ??
@@ -1043,7 +1142,10 @@ async function resolveGitHubAccessToken(
   if (connectToken) return connectToken;
 
   if (runContext.installationId !== undefined) {
-    return createGitHubInstallationToken(String(runContext.installationId));
+    return createGitHubInstallationToken(
+      String(runContext.installationId),
+      scopeRepositories,
+    );
   }
 
   throw new Error(
@@ -1132,6 +1234,7 @@ const githubInstallationTokenCache = new Map<string, GitHubInstallationToken>();
 
 async function createGitHubInstallationToken(
   installationId: string,
+  repositories?: readonly string[],
 ): Promise<string> {
   const apiBaseUrl =
     process.env.IMPEL_EVE_GITHUB_API_URL ?? "https://api.github.com";
@@ -1147,7 +1250,14 @@ async function createGitHubInstallationToken(
     );
   }
 
-  const cacheKey = `${apiBaseUrl}:${appId}:${installationId}`;
+  // Optionally scope the token to specific repositories (least privilege). The
+  // GitHub API expects bare repo names (no owner); an empty list means the token
+  // covers the whole installation, preserving the historical unscoped behavior.
+  const scope = (repositories ?? [])
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0)
+    .sort();
+  const cacheKey = `${apiBaseUrl}:${appId}:${installationId}:${scope.join(",")}`;
   const cached = githubInstallationTokenCache.get(cacheKey);
   if (cached && Date.now() < cached.expiresAtMs - 60_000) {
     return cached.token;
@@ -1161,8 +1271,13 @@ async function createGitHubInstallationToken(
       headers: {
         accept: "application/vnd.github+json",
         authorization: `Bearer ${jwt}`,
+        "content-type": "application/json",
         "x-github-api-version": "2022-11-28",
       },
+      body:
+        scope.length > 0
+          ? JSON.stringify({ repositories: scope })
+          : undefined,
     },
   );
   const body = await parseJsonResponse(response);
