@@ -8,6 +8,7 @@ export interface ImpelInferenceRunContext {
     runId?: string;
     traceId?: string;
     agent?: Record<string, unknown>;
+    runToken?: string;
 }
 export type ImpelInferenceHeaders = HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
 export type ImpelInferenceRunContextProvider = ImpelInferenceRunContext | (() => ImpelInferenceRunContext | Promise<ImpelInferenceRunContext>);

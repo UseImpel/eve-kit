@@ -31,6 +31,11 @@ export class RunTokenError extends Error {
   }
 }
 
+/**
+ * HTTP request header that carries the signed run token on model calls.
+ */
+export const RUN_TOKEN_HEADER = "x-impel-run-token";
+
 const RUN_TOKEN_VERSION = "v1";
 const base64UrlPattern = /^[A-Za-z0-9_-]+$/;
 

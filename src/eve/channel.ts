@@ -228,6 +228,10 @@ export async function extractImpelEveRunContextFromRequest(
   return normalizeImpelEveRunContext(body.clientContext);
 }
 
+// clientContext.runToken is deliberately NOT part of the typed channel context:
+// the raw clientContext sentinel (normalizeClientContextMessages) is the sole
+// carrier to the provider, keeping the credential out of channel metadata()
+// and workspace keys.
 export function normalizeImpelEveRunContext(
   value: unknown,
 ): ImpelEveRunContext | null {

@@ -9,6 +9,7 @@ import type {
   LanguageModelV3Usage,
   SharedV3Warning,
 } from "@ai-sdk/provider";
+import { RUN_TOKEN_HEADER } from "./contracts/run-token.js";
 
 export interface ImpelInferenceRunContext {
   orgId?: string;
@@ -19,6 +20,7 @@ export interface ImpelInferenceRunContext {
   runId?: string;
   traceId?: string;
   agent?: Record<string, unknown>;
+  runToken?: string;
 }
 
 export type ImpelInferenceHeaders =
@@ -300,17 +302,22 @@ async function resolveExtraHeaders(
 async function inferenceHeaders({
   apiKey,
   orgId,
+  runToken,
   extraHeaders,
   callHeaders,
 }: {
   apiKey: string;
   orgId: string;
+  runToken?: string;
   extraHeaders?: ImpelInferenceHeaders;
   callHeaders?: Record<string, string | undefined>;
 }): Promise<Record<string, string>> {
   return {
     ...(await resolveExtraHeaders(extraHeaders)),
     ...definedStringHeaders(callHeaders),
+    // A context-sourced run token overrides any caller-supplied header; when
+    // absent, caller headers pass through exactly as before.
+    ...(runToken ? { [RUN_TOKEN_HEADER]: runToken } : {}),
     authorization: `Bearer ${apiKey}`,
     "x-org-id": orgId,
     "x-impel-org-id": orgId,
@@ -619,6 +626,7 @@ function normalizeRunContext(
     obj.agent && typeof obj.agent === "object"
       ? (obj.agent as Record<string, unknown>)
       : undefined;
+  const runToken = typeof obj.runToken === "string" ? obj.runToken : undefined;
 
   return orgId !== undefined ||
     repos !== undefined ||
@@ -627,7 +635,8 @@ function normalizeRunContext(
     githubConnectorUid !== undefined ||
     runId !== undefined ||
     traceId !== undefined ||
-    agent !== undefined
+    agent !== undefined ||
+    runToken !== undefined
     ? {
         orgId,
         repos,
@@ -637,6 +646,7 @@ function normalizeRunContext(
         runId,
         traceId,
         agent,
+        runToken,
       }
     : null;
 }
@@ -703,6 +713,7 @@ function envRunContext(): ImpelInferenceRunContext {
     agent: process.env.IMPEL_RUN_AGENT
       ? safeJsonObject(process.env.IMPEL_RUN_AGENT)
       : undefined,
+    runToken: process.env.IMPEL_RUN_TOKEN,
   };
 }
 
@@ -737,6 +748,134 @@ function safeCallOptions(options: LanguageModelV3CallOptions) {
     includeRawChunks,
     providerOptions,
   };
+}
+
+const RUN_TOKEN_PLACEHOLDER = "<impel-run-token>";
+
+type WireFileData =
+  | { type: "url"; url: string }
+  | { type: "data"; data: string };
+
+function base64FromBytes(bytes: Uint8Array | ArrayBuffer): string {
+  return Buffer.from(
+    bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes,
+  ).toString("base64");
+}
+
+function base64FromDataUrl(url: string): string | undefined {
+  const comma = url.indexOf(",");
+  if (comma < 0) return undefined;
+  const header = url.slice("data:".length, comma);
+  const payload = url.slice(comma + 1);
+  try {
+    return /;base64$/i.test(header)
+      ? payload
+      : Buffer.from(decodeURIComponent(payload), "utf8").toString("base64");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Rewrites a V3 untagged file `data` value into the V4 tagged wire union.
+ * Returns undefined when the shape is unrecognized so the caller passes the
+ * part through unchanged (never throws).
+ */
+function normalizeFileDataForWire(data: unknown): WireFileData | undefined {
+  if (data instanceof Uint8Array || data instanceof ArrayBuffer) {
+    return { type: "data", data: base64FromBytes(data) };
+  }
+  if (typeof data === "string") {
+    if (/^https?:\/\//i.test(data)) return { type: "url", url: data };
+    if (/^data:/i.test(data)) {
+      const base64 = base64FromDataUrl(data);
+      return base64 === undefined ? undefined : { type: "data", data: base64 };
+    }
+    // V3 contract: any other string is base64-encoded file data.
+    return { type: "data", data };
+  }
+  if (data instanceof URL) {
+    if (data.protocol === "data:") {
+      const base64 = base64FromDataUrl(data.href);
+      return base64 === undefined ? undefined : { type: "data", data: base64 };
+    }
+    if (data.protocol === "http:" || data.protocol === "https:") {
+      return { type: "url", url: data.href };
+    }
+    return undefined;
+  }
+  if (data && typeof data === "object") {
+    // Already-tagged V4 union: only binary payloads need re-encoding.
+    const record = data as { type?: unknown; data?: unknown };
+    if (
+      record.type === "data" &&
+      (record.data instanceof Uint8Array || record.data instanceof ArrayBuffer)
+    ) {
+      return { type: "data", data: base64FromBytes(record.data) };
+    }
+  }
+  return undefined;
+}
+
+function scrubRunToken(text: string, runToken: string): string {
+  // The run token is base64url (no JSON metacharacters), so a plain substring
+  // replace keeps the surrounding JSON (e.g. the clientContext sentinel) valid.
+  return text.includes(runToken)
+    ? text.split(runToken).join(RUN_TOKEN_PLACEHOLDER)
+    : text;
+}
+
+/**
+ * Normalizes the prompt into the wire shape impel-inference forwards verbatim
+ * to @ai-sdk/anthropic@4, whose file converter is a `switch (part.data.type)`
+ * over reference|text|url|data with NO default case — V3 untagged strings and
+ * hydrated sandbox bytes (the eve harness inlines images <=3MB as Buffer) are
+ * silently dropped today, and raw bytes JSON-serialize as numeric-key garbage.
+ * Also scrubs the resolved run token from text parts so the credential never
+ * reaches the model or inference logs. Total: unrecognized shapes pass through
+ * unchanged, and a token-free, file-free prompt is returned as-is.
+ */
+function normalizePromptForWire(
+  prompt: LanguageModelV3CallOptions["prompt"],
+  runToken?: string,
+): unknown[] {
+  return prompt.map((message): unknown => {
+    const content: unknown = message.content;
+    if (typeof content === "string") {
+      if (!runToken) return message;
+      const scrubbed = scrubRunToken(content, runToken);
+      return scrubbed === content ? message : { ...message, content: scrubbed };
+    }
+    if (!Array.isArray(content)) return message;
+
+    let changed = false;
+    const parts = content.map((part: { type?: unknown }): unknown => {
+      if (runToken && part?.type === "text") {
+        const textPart = part as { type: "text"; text?: unknown };
+        // Total: a malformed text part (non-string `text`) passes through
+        // unchanged instead of throwing and failing the model call.
+        if (typeof textPart.text !== "string") return part;
+        const scrubbed = scrubRunToken(textPart.text, runToken);
+        if (scrubbed !== textPart.text) {
+          changed = true;
+          return { ...textPart, text: scrubbed };
+        }
+        return part;
+      }
+      if (part?.type === "file") {
+        const filePart = part as { type: "file"; data?: unknown };
+        const data = normalizeFileDataForWire(filePart.data);
+        if (data !== undefined) {
+          changed = true;
+          return { ...filePart, data };
+        }
+        return part;
+      }
+      return part;
+    });
+
+    return changed ? { ...message, content: parts } : message;
+  });
 }
 
 function requireConfigured(name: string, value: string | undefined): string {
@@ -804,11 +943,15 @@ export function impelInference(
       promptRunContext?.agent ??
       configuredRunContext?.agent ??
       fallbackRunContext.agent;
+    const runToken =
+      promptRunContext?.runToken ??
+      configuredRunContext?.runToken ??
+      fallbackRunContext.runToken;
 
     const body = {
       provider: opts?.provider ?? "claude-code",
       modelId,
-      prompt: options.prompt,
+      prompt: normalizePromptForWire(options.prompt, runToken),
       providerOptions: constructorProviderOptions,
       callOptions: safeCallOptions(options),
       orgId,
@@ -828,6 +971,7 @@ export function impelInference(
     const headers = await inferenceHeaders({
       apiKey,
       orgId,
+      runToken,
       extraHeaders: opts?.headers,
       callHeaders: options.headers,
     });
