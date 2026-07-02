@@ -1252,6 +1252,121 @@ test("retries transient provider overload before surfacing API error text", asyn
   }
 });
 
+async function captureRunTokenRequest({ prompt, modelOptions = {}, callOptions = {} }) {
+  const requests = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+
+    return new Response(
+      sse([{ type: "stream-start", warnings: [] }, finishPart(), "[DONE]"]),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  };
+
+  try {
+    const model = impelInference("claude-opus-4-8", {
+      baseUrl: "https://infer.example",
+      apiKey: "secret",
+      orgId: "org_default",
+      ...modelOptions,
+    });
+
+    const { stream } = await model.doStream({ prompt, ...callOptions });
+    await stream.cancel();
+
+    assert.equal(requests.length, 1);
+    return requests[0].init;
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+}
+
+test("hosted stream sends x-impel-run-token from the clientContext sentinel and scrubs the literal", async () => {
+  const runToken = "v1.eyJvcmdJZCI6Im9yZ19wcm9tcHQifQ.c2lnbmF0dXJl";
+  const init = await captureRunTokenRequest({
+    prompt: promptWithClientContext({
+      orgId: "org_prompt",
+      repos: ["UseImpel/next"],
+      runToken,
+    }),
+    callOptions: {
+      headers: { "x-impel-run-token": "caller-supplied-ignored" },
+    },
+  });
+
+  assert.equal(init.headers["x-impel-run-token"], runToken);
+  assert.equal(init.headers["x-org-id"], "org_prompt");
+  assert.equal(init.headers["x-impel-org-id"], "org_prompt");
+
+  const rawBody = String(init.body);
+  assert.equal(rawBody.includes(runToken), false);
+  assert.match(rawBody, /<impel-run-token>/);
+  const body = JSON.parse(rawBody);
+  assert.deepEqual(body.repos, ["UseImpel/next"]);
+});
+
+test("hosted stream headers are unchanged when no run token is resolved", async () => {
+  const init = await captureRunTokenRequest({
+    prompt: promptWithClientContext({
+      orgId: "org_prompt",
+      repos: ["UseImpel/next"],
+    }),
+  });
+
+  assert.deepEqual(init.headers, {
+    authorization: "Bearer secret",
+    "x-org-id": "org_prompt",
+    "x-impel-org-id": "org_prompt",
+    "content-type": "application/json",
+  });
+});
+
+test("token scrub passes malformed text parts through without throwing", async () => {
+  const runToken = "v1.eyJvcmdJZCI6Im9yZ19wcm9tcHQifQ.c2lnbmF0dXJl";
+  const init = await captureRunTokenRequest({
+    prompt: [
+      ...promptWithClientContext({ orgId: "org_prompt", runToken }),
+      { role: "user", content: [{ type: "text", text: 42 }] },
+    ],
+  });
+
+  assert.equal(init.headers["x-impel-run-token"], runToken);
+  const body = JSON.parse(String(init.body));
+  assert.deepEqual(body.prompt[1].content, [{ type: "text", text: 42 }]);
+});
+
+test("run token precedence: prompt sentinel beats runContext beats IMPEL_RUN_TOKEN env", async () => {
+  const previousEnvToken = process.env.IMPEL_RUN_TOKEN;
+  process.env.IMPEL_RUN_TOKEN = "env-token";
+
+  try {
+    const sentinelWins = await captureRunTokenRequest({
+      prompt: promptWithClientContext({
+        orgId: "org_prompt",
+        runToken: "sentinel-token",
+      }),
+      modelOptions: { runContext: { runToken: "opts-token" } },
+    });
+    assert.equal(sentinelWins.headers["x-impel-run-token"], "sentinel-token");
+
+    const optsWins = await captureRunTokenRequest({
+      prompt: [],
+      modelOptions: { runContext: { runToken: "opts-token" } },
+    });
+    assert.equal(optsWins.headers["x-impel-run-token"], "opts-token");
+
+    const envWins = await captureRunTokenRequest({ prompt: [] });
+    assert.equal(envWins.headers["x-impel-run-token"], "env-token");
+  } finally {
+    if (previousEnvToken === undefined) {
+      delete process.env.IMPEL_RUN_TOKEN;
+    } else {
+      process.env.IMPEL_RUN_TOKEN = previousEnvToken;
+    }
+  }
+});
+
 test("surfaces structured provider errors with preceding provider text", async () => {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {

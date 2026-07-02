@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  RUN_TOKEN_HEADER,
   RunTokenError,
   signRunToken,
   verifyRunToken,
 } from "@useimpel/eve-kit/contracts/run-token";
+
+test("run token header name is the shared cross-repo contract", () => {
+  assert.equal(RUN_TOKEN_HEADER, "x-impel-run-token");
+});
 
 test("run token round-trips verified identity", () => {
   const token = signRunToken(
