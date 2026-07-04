@@ -443,6 +443,7 @@ function stateFromPreparedWorkspaceMetadata(
 ): ImpelEveChannelState {
   return {
     runContext,
+    workspaceAuth: { runToken: null },
     workspace: {
       prepared: true,
       sandboxId: sandbox.id,

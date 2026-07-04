@@ -1,6 +1,6 @@
 {
   "name": "@useimpel/eve-kit",
-  "version": "0.2.43",
+  "version": "0.2.44",
   "description": "Eve helpers and AI SDK provider for Impel's durable inference service.",
   "type": "module",
   "repository": {

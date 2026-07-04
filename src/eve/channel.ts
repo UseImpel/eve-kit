@@ -70,6 +70,11 @@ export interface ImpelPlannedRepoCheckout {
 
 export interface ImpelEveChannelState {
   runContext: ImpelEveRunContext | null;
+  // Signed run token from the raw clientContext, carried OUTSIDE the typed run
+  // context so it can never reach channel metadata() or workspace keys. Used
+  // only to authenticate workspace-prep GitHub resolution against the
+  // impel-identity service (dark unless IMPEL_IDENTITY_URL is set).
+  workspaceAuth: { runToken: string | null };
   workspace: {
     prepared: boolean;
     sandboxId: string | null;
@@ -198,9 +203,11 @@ export function defaultImpelEveChannel({
 
 export function createImpelEveChannelState(
   runContext: ImpelEveRunContext | null,
+  workspaceAuth?: { runToken?: string | null },
 ): ImpelEveChannelState {
   return {
     runContext,
+    workspaceAuth: { runToken: workspaceAuth?.runToken ?? null },
     workspace: {
       prepared: false,
       sandboxId: null,
@@ -226,6 +233,16 @@ export async function extractImpelEveRunContextFromRequest(
 
   if (!isRecord(body)) return null;
   return normalizeImpelEveRunContext(body.clientContext);
+}
+
+// Reads the signed run token off the raw clientContext for channel-state
+// workspaceAuth. Kept separate from normalizeImpelEveRunContext on purpose —
+// see the note below.
+export function readClientContextRunToken(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  return typeof value.runToken === "string" && value.runToken.length > 0
+    ? value.runToken
+    : null;
 }
 
 // clientContext.runToken is deliberately NOT part of the typed channel context:
@@ -324,7 +341,9 @@ export async function prepareImpelEveWorkspace(
   }
 
   try {
-    const token = await resolveGitHubAccessToken(runContext);
+    const token = await resolveGitHubAccessToken(runContext, {
+      runToken: state.workspaceAuth.runToken,
+    });
     await sandbox.setNetworkPolicy(buildGitHubBrokerNetworkPolicy(token));
     await configureGitHubCliAuthMarker(sandbox);
     await prepareWorkspaceRoot(sandbox, checkoutPlan.layout);
@@ -417,6 +436,7 @@ async function prepareReferenceRepoAccess(
     const token = await resolveGitHubAccessToken(referenceRunContext, {
       scopeRepositories: githubRepositoryNamesFromRunContext(referenceRunContext),
       readOnly: true,
+      runToken: state.workspaceAuth.runToken,
     });
     await sandbox.setNetworkPolicy(buildGitHubBrokerNetworkPolicy(token));
     await configureGitHubCliAuthMarker(sandbox);
@@ -458,6 +478,7 @@ function createImpelEveRoutes(auth: readonly AuthFn<Request>[]) {
 
       const state = createImpelEveChannelState(
         normalizeImpelEveRunContext(parsed.clientContext),
+        { runToken: readClientContextRunToken(parsed.clientContext) },
       );
       const session = await args.send(
         createSendPayload(parsed),
@@ -510,6 +531,7 @@ function createImpelEveRoutes(auth: readonly AuthFn<Request>[]) {
 
         const state = createImpelEveChannelState(
           normalizeImpelEveRunContext(parsed.clientContext),
+          { runToken: readClientContextRunToken(parsed.clientContext) },
         );
         const session = await args.send(
           createSendPayload(parsed),
@@ -1146,6 +1168,55 @@ const REFERENCE_REPO_INSTALLATION_PERMISSIONS = {
 interface ResolveGitHubAccessTokenOptions {
   scopeRepositories?: readonly string[];
   readOnly?: boolean;
+  runToken?: string | null;
+}
+
+// Centralized resolution through the impel-identity service. Dark unless the
+// deployment sets IMPEL_IDENTITY_URL AND the dispatcher sent a signed run
+// token (next's IMPEL_RUNTIME_RUN_TOKEN flag). The service resolves the org's
+// registry entry itself — the caller-asserted installationId is not consulted.
+// Any failure falls through to the local resolution chain below.
+async function resolveImpelIdentityGitHubToken(
+  runContext: ImpelEveRunContext,
+  options: ResolveGitHubAccessTokenOptions,
+): Promise<string | null> {
+  const baseUrl = process.env.IMPEL_IDENTITY_URL?.trim();
+  const runToken = options.runToken ?? null;
+  if (!baseUrl || !runToken) return null;
+  const repos =
+    options.scopeRepositories ??
+    (runContext.repos?.length ? runContext.repos : undefined);
+  try {
+    const response = await fetch(new URL("/v1/resolve", baseUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-impel-run-token": runToken,
+      },
+      body: JSON.stringify({
+        provider: "github",
+        role: options.readOnly ? "read" : "write",
+        ...(repos ? { repos: [...repos] } : {}),
+        purpose: "eve-workspace",
+      }),
+      signal: AbortSignal.timeout(7_000),
+    });
+    if (!response.ok) {
+      console.warn(
+        `impel-identity resolve failed (HTTP ${response.status}); falling back to local GitHub resolution`,
+      );
+      return null;
+    }
+    const payload = (await response.json()) as { token?: unknown };
+    return typeof payload.token === "string" && payload.token.length > 0
+      ? payload.token
+      : null;
+  } catch (error) {
+    console.warn(
+      `impel-identity resolve unreachable (${error instanceof Error ? error.message : "unknown error"}); falling back to local GitHub resolution`,
+    );
+    return null;
+  }
 }
 
 async function resolveGitHubAccessToken(
@@ -1153,6 +1224,15 @@ async function resolveGitHubAccessToken(
   options: ResolveGitHubAccessTokenOptions = {},
 ): Promise<string> {
   const { scopeRepositories, readOnly = false } = options;
+
+  // When a deployment opts into centralized resolution, the service wins over
+  // every local path (including stray static tokens).
+  const identityToken = await resolveImpelIdentityGitHubToken(
+    runContext,
+    options,
+  );
+  if (identityToken) return identityToken;
+
   const staticToken =
     process.env.IMPEL_EVE_GITHUB_TOKEN ??
     process.env.GITHUB_TOKEN ??

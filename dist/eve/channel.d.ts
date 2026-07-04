@@ -46,6 +46,9 @@ export interface ImpelPlannedRepoCheckout {
 }
 export interface ImpelEveChannelState {
     runContext: ImpelEveRunContext | null;
+    workspaceAuth: {
+        runToken: string | null;
+    };
     workspace: {
         prepared: boolean;
         sandboxId: string | null;
@@ -65,8 +68,11 @@ export interface PrepareImpelEveWorkspaceOptions {
     getSandbox: () => Promise<SandboxSession>;
 }
 export declare function defaultImpelEveChannel({ basicUser, basicPassword, includePlaceholderAuth, prepareAttachedRepos, checkoutDepth, trustedVercelSubjects, referenceRepos, }?: DefaultImpelEveChannelOptions): ImpelEveChannel;
-export declare function createImpelEveChannelState(runContext: ImpelEveRunContext | null): ImpelEveChannelState;
+export declare function createImpelEveChannelState(runContext: ImpelEveRunContext | null, workspaceAuth?: {
+    runToken?: string | null;
+}): ImpelEveChannelState;
 export declare function extractImpelEveRunContextFromRequest(request: Request): Promise<ImpelEveRunContext | null>;
+export declare function readClientContextRunToken(value: unknown): string | null;
 export declare function normalizeImpelEveRunContext(value: unknown): ImpelEveRunContext | null;
 export declare function normalizeClientContextMessages(value: unknown): string[] | undefined;
 export declare function prepareImpelEveWorkspace(state: ImpelEveChannelState, options: PrepareImpelEveWorkspaceOptions): Promise<void>;

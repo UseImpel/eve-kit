@@ -251,6 +251,7 @@ function plannedReposFromPreparedWorkspaceMetadata(metadata) {
 function stateFromPreparedWorkspaceMetadata(sandbox, runContext, metadata) {
     return {
         runContext,
+        workspaceAuth: { runToken: null },
         workspace: {
             prepared: true,
             sandboxId: sandbox.id,
