@@ -1,0 +1,120 @@
+name: Publish
+
+# eve-kit is distributed as GitHub tag tarballs (consumers install
+# https://github.com/UseImpel/eve-kit/archive/refs/tags/<tag>.tar.gz), NOT via the
+# npm registry — dist/ is committed and archive tarballs never run `prepare`. This
+# workflow builds + tests the tag, guards that the committed dist/ matches a fresh
+# build, cuts a GitHub Release, and (optionally) dispatches the new version to
+# downstream consumers.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)publish a release for, e.g. v0.2.45"
+        required: false
+
+permissions:
+  contents: write # create/read releases
+
+concurrency:
+  group: publish-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.meta.outputs.tag }}
+      release_url: ${{ steps.release.outputs.url }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build & test
+        run: npm run check
+
+      - name: Verify committed dist/ matches a fresh build
+        # Consumers install the tag tarball verbatim, so a stale committed dist/
+        # would ship stale code to everyone. `npm run check` just rebuilt dist/;
+        # warn loudly (non-blocking) if that changed anything under dist/.
+        run: |
+          if git diff --quiet -- dist; then
+            echo "dist/ is in sync with source for this tag."
+          else
+            echo "::warning title=dist drift::Committed dist/ does not match a fresh build for this tag. Rebuild (npm run build), commit dist/, and re-tag — consumers install the tarball as-is."
+            git diff --stat -- dist || true
+          fi
+
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release (idempotent)
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; leaving it unchanged."
+          else
+            gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
+          fi
+          echo "url=$(gh release view "$TAG" --json url -q .url)" >> "$GITHUB_OUTPUT"
+
+      - name: Job summary
+        run: |
+          {
+            echo "### eve-kit ${{ steps.meta.outputs.tag }} published"
+            echo ""
+            echo "- Package: \`@useimpel/eve-kit@${{ steps.meta.outputs.version }}\`"
+            echo "- Install: \`npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/${{ steps.meta.outputs.tag }}.tar.gz\`"
+            echo "- Release: ${{ steps.release.outputs.url }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Dispatch the new version to downstream consumers. Consumers pin eve-kit in
+  # UseImpel/next in three coupled places (src/lib/eve-kit-version.ts EVE_KIT_VERSION,
+  # the package.json tarball dependency, and the shouldUpgradeEveKit() floor in
+  # src/lib/connectors/github-write.ts). With a cross-repo token this fires a
+  # repository_dispatch so a consumer-side workflow can open the bump PR; without
+  # one it degrades to a clear notice describing the manual bump.
+  dispatch-consumers:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify consumers of the new eve-kit version
+        env:
+          DISPATCH_TOKEN: ${{ secrets.CONSUMER_DISPATCH_TOKEN }}
+          TAG: ${{ needs.publish.outputs.release_tag }}
+          VERSION: ${{ needs.publish.outputs.version }}
+          RELEASE_URL: ${{ needs.publish.outputs.release_url }}
+        run: |
+          if [ -z "$DISPATCH_TOKEN" ]; then
+            echo "::notice title=No consumer dispatch token::Set the CONSUMER_DISPATCH_TOKEN secret (a token with repository_dispatch rights on UseImpel/next) to auto-open a bump PR. Manual bump in next/: src/lib/eve-kit-version.ts (EVE_KIT_VERSION), the package.json eve-kit tarball dependency, and the shouldUpgradeEveKit() floor in src/lib/connectors/github-write.ts."
+            exit 0
+          fi
+          PAYLOAD="$(node -e "console.log(JSON.stringify({event_type:'eve-kit-release',client_payload:{version:process.env.VERSION,tag:process.env.TAG,release_url:process.env.RELEASE_URL}}))")"
+          curl -sSf -X POST \
+            -H "Authorization: Bearer $DISPATCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/UseImpel/next/dispatches \
+            -d "$PAYLOAD"
+          echo "Dispatched eve-kit-release ($TAG) to UseImpel/next."
