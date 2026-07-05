@@ -84,6 +84,10 @@
       "types": "./dist/eve/telegram.d.ts",
       "import": "./dist/eve/telegram.js"
     },
+    "./eve/whatsapp": {
+      "types": "./dist/eve/whatsapp/index.d.ts",
+      "import": "./dist/eve/whatsapp/index.js"
+    },
     "./retrieval": {
       "types": "./dist/retrieval/index.d.ts",
       "import": "./dist/retrieval/index.js"
