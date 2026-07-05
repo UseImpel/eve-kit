@@ -140,6 +140,8 @@ export interface ConfidenceFlag {
     title: string;
     /** Where the content was actually placed. */
     targetPage: string;
+    /** The plan key (sectionKey) this flag can be re-synthesized with. */
+    sectionKey: string;
     /** Judge's confidence the decision was correct (0..1; 0 if the check failed). */
     confidence: number;
     /** The threshold it fell under, recorded for context. */
