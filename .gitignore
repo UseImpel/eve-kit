@@ -2,3 +2,5 @@ node_modules
 *.tsbuildinfo
 npm-debug.log*
 .DS_Store
+.impel/
+README_IMPEL_WORKSPACE.md

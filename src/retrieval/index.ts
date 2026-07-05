@@ -16,3 +16,5 @@ export * from "./lexical.js";
 export * from "./eval.js";
 export * from "./helpers.js";
 export * from "./load-wiki.js";
+export * from "./passage-splitter.js";
+export * from "./manifest-loader.js";

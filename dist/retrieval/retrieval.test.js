@@ -113,4 +113,66 @@ test("evidence gate abstains with no results or low confidence", () => {
     };
     assert.deepEqual(evidenceGate(strong), { gated: false });
 });
+test("vector store supports passage-level queries with page deduplication", async () => {
+    const store = new InMemoryVectorStore();
+    const embedder = fakeEmbedder();
+    // Upsert page-level docs
+    await store.upsert(docs.map((doc) => ({
+        ...doc,
+        embedding: new Array(64).fill(0), // dummy
+    })));
+    // Upsert passages: bonds has 2 passages, brand has 1, onboarding has 1
+    const bondPassages = [
+        "A bond pays periodic interest called a coupon until maturity. Bond coupon.",
+        "More about bonds and their features.",
+    ];
+    const brandPassages = [
+        "Our brand voice is warm and direct across every campaign.",
+    ];
+    const onboardingPassages = [
+        "New scholars complete onboarding before the first cohort week.",
+    ];
+    const allPassageTexts = [
+        ...bondPassages,
+        ...brandPassages,
+        ...onboardingPassages,
+    ];
+    const vectors = await embedder(allPassageTexts);
+    let vectorIdx = 0;
+    const passages = [
+        ...bondPassages.map((text, i) => ({
+            pageId: "finance/bonds.md",
+            index: i,
+            text,
+            embedding: vectors[vectorIdx++],
+        })),
+        ...brandPassages.map((text, i) => ({
+            pageId: "marketing/brand.md",
+            index: i,
+            text,
+            embedding: vectors[vectorIdx++],
+        })),
+        ...onboardingPassages.map((text, i) => ({
+            pageId: "ops/onboarding.md",
+            index: i,
+            text,
+            embedding: vectors[vectorIdx++],
+        })),
+    ];
+    await store.upsertPassages(passages);
+    // Query for "bond interest" should find the bonds page (best passage match)
+    const [queryVec] = await embedder(["bond interest"]);
+    const results = await store.query({
+        embedding: queryVec,
+        k: 3,
+    });
+    // Results should be deduplicated to pages
+    const resultPaths = results.map((c) => c.path);
+    assert.ok(new Set(resultPaths).size === resultPaths.length, "Each page should appear at most once");
+    // Bonds should rank high (has multiple passages matching query terms)
+    assert.ok(resultPaths.includes("finance/bonds.md"));
+    // Snippets should be passage text, not page text
+    const bondsResult = results.find((r) => r.path === "finance/bonds.md");
+    assert.ok(bondsResult && bondsResult.snippet.includes("coupon"), "Snippet should be passage text");
+});
 //# sourceMappingURL=retrieval.test.js.map
