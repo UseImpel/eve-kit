@@ -27,6 +27,13 @@ export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_U
             return {
                 ...(state.runContext ?? {}),
                 workspacePrepared: state.workspace.prepared,
+                // Surface checkout failures to the MODEL: eve's adapter wrapper
+                // swallows the turn.started throw, so without this the agent sees an
+                // empty /workspace with no explanation and mis-reports the repo as
+                // empty/missing instead of naming the real credential/config failure.
+                ...(state.workspace.error
+                    ? { workspaceError: state.workspace.error }
+                    : {}),
             };
         },
         routes: createImpelEveRoutes(auth),
@@ -194,8 +201,31 @@ export async function prepareImpelEveWorkspace(state, options) {
             repos: [],
             error: message,
         };
+        // Leave a marker where the agent will look: eve's adapter swallows this
+        // throw, so an unexplained empty /workspace is all the model would see.
+        await writeCheckoutFailureMarker(sandbox, message).catch(() => { });
         throw error;
     }
+}
+/** Best-effort `/workspace/CHECKOUT_FAILED.md` so `ls /workspace` tells the
+ * story even when the failure event itself never reaches the run. */
+async function writeCheckoutFailureMarker(sandbox, message) {
+    const body = [
+        "# Repository checkout FAILED",
+        "",
+        "The platform attached repositories to this run, but checking them out",
+        "failed — this workspace is NOT a faithful copy of the repository.",
+        "Report this error to the user verbatim instead of treating the",
+        "repository as empty:",
+        "",
+        "```",
+        message.replaceAll("`", "'"),
+        "```",
+    ].join("\n");
+    const encoded = Buffer.from(body, "utf8").toString("base64");
+    await sandbox.run({
+        command: `mkdir -p /workspace && printf '%s' '${encoded}' | base64 -d > /workspace/CHECKOUT_FAILED.md`,
+    });
 }
 function normalizeReferenceRepos(referenceRepos) {
     const names = new Set();
