@@ -1,6 +1,6 @@
 {
   "name": "@useimpel/eve-kit",
-  "version": "0.2.45",
+  "version": "0.2.46",
   "description": "Eve helpers and AI SDK provider for Impel's durable inference service.",
   "type": "module",
   "repository": {
@@ -87,6 +87,10 @@
     "./eve/whatsapp": {
       "types": "./dist/eve/whatsapp/index.d.ts",
       "import": "./dist/eve/whatsapp/index.js"
+    },
+    "./eve/catalog": {
+      "types": "./dist/eve/catalog.d.ts",
+      "import": "./dist/eve/catalog.js"
     },
     "./retrieval": {
       "types": "./dist/retrieval/index.d.ts",

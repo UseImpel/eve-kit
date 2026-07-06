@@ -8,5 +8,7 @@ export * from "./evals.js";
 export * from "./runtime.js";
 export * from "./bridge.js";
 export * from "./telegram.js";
+export * from "./whatsapp/index.js";
+export * from "./catalog.js";
 export * from "./agent-tools/query-wiki.js";
 //# sourceMappingURL=index.js.map
