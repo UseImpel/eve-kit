@@ -600,14 +600,55 @@ function safeJsonObject(raw: string): Record<string, unknown> | undefined {
   }
 }
 
+/**
+ * Attempts to extract repos from agent metadata.
+ * When an agent hasn't been published yet, the repos field might be missing
+ * from the client context, but the agent metadata may contain repository information.
+ *
+ * @param agent - The agent metadata object
+ * @returns An array of repo strings if found, otherwise undefined
+ */
+function extractReposFromAgent(
+  agent: Record<string, unknown> | undefined,
+): string[] | undefined {
+  if (!agent) return undefined;
+
+  // Try to extract repos from agent metadata
+  // The agent object may contain fields like:
+  // - repos: string[] (explicit repos field in agent metadata)
+  // - repositories: string[] (alternative field name)
+  // - sourceRepos: string[] (source repositories)
+  const reposField = agent.repos ?? agent.repositories ?? agent.sourceRepos;
+
+  if (
+    Array.isArray(reposField) &&
+    reposField.every((r) => typeof r === "string")
+  ) {
+    const typed = reposField as string[];
+    return typed.length > 0 ? typed : undefined;
+  }
+
+  return undefined;
+}
+
 function normalizeRunContext(
   obj: Record<string, unknown>,
 ): ImpelInferenceRunContext | null {
   const orgId = typeof obj.orgId === "string" ? obj.orgId : undefined;
-  const repos =
+  let repos =
     Array.isArray(obj.repos) && obj.repos.every((r) => typeof r === "string")
       ? (obj.repos as string[])
       : undefined;
+
+  // If repos is not explicitly provided, try to extract from agent metadata
+  if (!repos) {
+    const agent =
+      obj.agent && typeof obj.agent === "object"
+        ? (obj.agent as Record<string, unknown>)
+        : undefined;
+    repos = extractReposFromAgent(agent);
+  }
+
   const branch = typeof obj.branch === "string" ? obj.branch : undefined;
   const installationId =
     typeof obj.installationId === "string"
@@ -685,16 +726,26 @@ function extractRunContextFromPrompt(
 
     const context = normalizeRunContext(parsed as Record<string, unknown>);
     if (!context?.repos?.length) {
-      console.warn(
+      const parsedObj = parsed as Record<string, unknown>;
+      const hasAgent = parsedObj.agent !== undefined;
+      const parsedKeys = Object.keys(parsedObj);
+      let warningMsg =
         "[impel-inference-provider] clientContext sentinel parsed but yielded no repos; " +
-          "repos will be undefined on the /v1/model/stream call (run may execute in an " +
-          `empty workspace). parsedKeys=${JSON.stringify(Object.keys(parsed as Record<string, unknown>))}`,
-      );
+        "repos will be undefined on the /v1/model/stream call (run may execute in an " +
+        `empty workspace). parsedKeys=${JSON.stringify(parsedKeys)}`;
+
+      if (hasAgent && !context?.repos) {
+        warningMsg +=
+          "; agent metadata was present but did not contain repos — ensure the agent's client context includes a repos field.";
+      }
+
+      console.warn(warningMsg);
     }
     return context;
   }
   return null;
 }
+
 
 async function resolveConfiguredRunContext(
   runContext: ImpelInferenceRunContextProvider | undefined,
