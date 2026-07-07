@@ -152,12 +152,58 @@ async function prepareImpelWorkspaceForTool(ctx) {
     const restored = await preparedWorkspaceFromSandboxMetadata(ctx.session.id, sandbox);
     if (restored)
         return restored;
-    const runContext = requireImpelWorkspaceRunContext(ctx);
+    // A subagent spawned via the built-in `agent` tool shares the parent's
+    // sandbox but runs in its OWN session with no clientContext repos, so
+    // channel/session resolution finds nothing. Recover the parent's repos +
+    // checkout auth from the shared-sandbox run-context marker and prepare this
+    // run's own view (idempotent clone into the shared /workspace). This is what
+    // lets delegated repo work actually reach the files.
+    const runContext = rememberImpelWorkspaceRunContext(ctx) ??
+        (await recoverRunContextFromSandboxMarker(sandbox));
+    if (!runContext?.repos?.length) {
+        throw new WorkspaceToolBlockedError("workspace_context_missing", [
+            "No target repository is attached to this Eve run, so sandbox workspace tools are unavailable.",
+            "Use the workspace context tool first, or report that repository context is missing instead of inspecting /workspace.",
+        ].join(" "));
+    }
+    rememberImpelWorkspaceRunContextForSession(ctx.session.id, runContext);
     const state = workspaceStateForRun(ctx.session.id, runContext);
     await prepareWorkspaceState(state, sandbox);
     const plannedRepos = planImpelEveRepoCheckouts(runContext.repos ?? []);
     await assertWorkspaceRootExists(sandbox);
     return { sandbox, runContext, state, plannedRepos };
+}
+/**
+ * Recover the run-context (repos + checkout auth) from the shared-sandbox
+ * marker `/workspace/.impel/run-context.json` — written by the parent's
+ * workspace prep (eagerly, before its own clone). Unlike
+ * preparedWorkspaceFromSandboxMetadata this does NOT require the workspace to
+ * be checked out: it returns just enough (repo names, branch, installationId)
+ * for THIS run to clone its own view. Used only as the last fallback before a
+ * co-resident subagent would otherwise be told "no repository attached".
+ */
+async function recoverRunContextFromSandboxMarker(sandbox) {
+    const raw = await readPreparedWorkspaceMetadataJson(sandbox);
+    if (!isRecord(raw))
+        return undefined;
+    const repoNames = Array.isArray(raw.repos)
+        ? raw.repos
+            .map((entry) => (isRecord(entry) ? readString(entry.repo) : undefined))
+            .filter((name) => Boolean(name))
+        : [];
+    if (repoNames.length === 0)
+        return undefined;
+    const runContext = { repos: repoNames };
+    copyStringProperty(runContext, "orgId", readString(raw.orgId));
+    copyStringProperty(runContext, "branch", readString(raw.branch));
+    copyStringProperty(runContext, "runId", readString(raw.runId));
+    copyStringProperty(runContext, "traceId", readString(raw.traceId));
+    copyStringProperty(runContext, "githubConnectorUid", readString(raw.githubConnectorUid));
+    if (typeof raw.installationId === "string" ||
+        typeof raw.installationId === "number") {
+        runContext.installationId = raw.installationId;
+    }
+    return runContext;
 }
 async function preparedWorkspaceFromSandboxMetadata(sessionId, sandbox) {
     const metadata = await readPreparedWorkspaceMetadata(sandbox);
@@ -239,6 +285,11 @@ function runContextFromPreparedWorkspaceMetadata(metadata) {
     copyStringProperty(runContext, "branch", metadata.branch);
     copyStringProperty(runContext, "runId", metadata.runId);
     copyStringProperty(runContext, "traceId", metadata.traceId);
+    if (typeof metadata.installationId === "string" ||
+        typeof metadata.installationId === "number") {
+        runContext.installationId = metadata.installationId;
+    }
+    copyStringProperty(runContext, "githubConnectorUid", metadata.githubConnectorUid);
     return runContext;
 }
 function plannedReposFromPreparedWorkspaceMetadata(metadata) {

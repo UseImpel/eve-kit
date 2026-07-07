@@ -355,6 +355,12 @@ export async function prepareImpelEveWorkspace(
     await configureGitHubCliAuthMarker(sandbox);
     await prepareWorkspaceRoot(sandbox, checkoutPlan.layout);
 
+    // Write the run-context marker BEFORE cloning so a co-resident subagent
+    // that runs while this checkout is still in flight can already recover the
+    // repos and prepare its own view. Overwritten with the checked-out shas by
+    // writeWorkspaceMetadata below.
+    await writeRunContextMarker(sandbox, runContext, checkoutPlan);
+
     const prepared: ImpelPreparedRepo[] = [];
     for (const planned of checkoutPlan.repos) {
       const checkout = await checkoutGitHubRepository(
@@ -1103,6 +1109,41 @@ async function configureGitHubCliAuthMarker(
   );
 }
 
+/** Persist a lightweight run-context marker (repos + auth to clone them) to the
+ * shared sandbox BEFORE the checkout completes, so a co-resident subagent can
+ * recover the parent's repos even mid-prep. */
+async function writeRunContextMarker(
+  sandbox: SandboxSession,
+  runContext: ImpelEveRunContext,
+  checkoutPlan: { layout: ImpelWorkspaceLayout; repos: readonly ImpelPlannedRepoCheckout[] },
+): Promise<void> {
+  const metadata = {
+    preparedAt: new Date().toISOString(),
+    pending: true,
+    layout: checkoutPlan.layout,
+    workspaceRoot: "/workspace",
+    orgId: runContext.orgId,
+    runId: runContext.runId,
+    traceId: runContext.traceId,
+    branch: runContext.branch,
+    installationId: runContext.installationId,
+    githubConnectorUid: runContext.githubConnectorUid,
+    repos: checkoutPlan.repos.map((repo) => ({
+      repo: repo.repo,
+      path: repo.path,
+      sha: "",
+    })),
+  };
+  try {
+    await sandbox.writeTextFile({
+      path: "/workspace/.impel/run-context.json",
+      content: JSON.stringify(metadata, null, 2),
+    });
+  } catch {
+    // Best-effort: the full metadata write after checkout is the source of truth.
+  }
+}
+
 async function writeWorkspaceMetadata(
   sandbox: SandboxSession,
   runContext: ImpelEveRunContext,
@@ -1117,6 +1158,12 @@ async function writeWorkspaceMetadata(
     runId: runContext.runId,
     traceId: runContext.traceId,
     branch: runContext.branch,
+    // installationId/connectorUid persisted so a co-resident subagent (built-in
+    // `agent` tool, shares this sandbox) can recover the repos AND mint a
+    // checkout token to clone them itself — the parent's clientContext never
+    // reaches the child's session directly.
+    installationId: runContext.installationId,
+    githubConnectorUid: runContext.githubConnectorUid,
     repos,
   };
   const lines = [
