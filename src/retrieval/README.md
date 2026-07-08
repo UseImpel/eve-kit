@@ -17,11 +17,18 @@ persisted index artifacts today; a vector DB only if scale ever demands it.
 - `index-store.ts` — persist / load a built index as an artifact, so retrieval
   doesn't re-embed every run (mirrors how the platform shipped page embeddings
   in the release manifest).
-- `release-index.ts` — **the read end of the pipeline seam.** Loads the index
-  _ingestion_ emits at `wiki/_meta/index.json`, **backfills any docs missing an
-  embedding** (embedding is best-effort at release), and returns a queryable
-  store + the index-pinned embedder to query with. The query MUST use that same
-  embedder or the vectors aren't comparable.
+- `release-index.ts` — **the read end of the pipeline seam.** Loads the v2
+  manifest _ingestion_ emits at `wiki/_meta/index/manifest.json` (page content
+  from the wiki tree, passage vectors from the binary sidecars under
+  `wiki/_meta/embeddings/`), **backfills any pages without a usable sidecar**
+  (embedding is best-effort at release), and returns a queryable store + the
+  manifest-pinned embedder to query with. The query MUST use that same embedder
+  or the vectors aren't comparable. A missing manifest is a hard error — the
+  old monolithic `wiki/_meta/index.json` is frozen (2026-07-05) and is never
+  used as a fallback.
+- `manifest-loader.ts` / `embedding-sidecar.ts` — the v2 artifact readers
+  `release-index.ts` composes: lazy manifest facade + sidecar binary format
+  (mirror of impel-ingestion's writer).
 - `lexical.ts` — weighted keyword scorer (title/tag/content/path), modeled on
   the platform's ranked wiki search; the lexical half of the hybrid strategies.
 - `evidence-gate.ts` — answer-or-abstain decision, modeled on the platform's
@@ -52,14 +59,14 @@ npx tsx --test src/lib/retrieval/*.test.ts
 # live run against a wiki directory (needs gateway/OpenAI creds)
 npx tsx src/lib/retrieval/cli.ts ./path/to/wiki "how does bond interest work" section-aware
 
-# compare strategies over the emitted index + a labeled query set — let the numbers pick the winner
-npx tsx src/lib/retrieval/eval-cli.ts ./wiki/_meta/index.json ./queries.json
+# compare strategies over the emitted manifest + a labeled query set — let the numbers pick the winner
+npx tsx src/lib/retrieval/eval-cli.ts ./wiki/_meta/index/manifest.json ./queries.json
 
 # build a saved index artifact (so it doesn't re-embed every run)
 npx tsx src/lib/retrieval/build-index-cli.ts ./path/to/wiki ./index.json
 
-# answer over the index INGESTION emitted (wiki/_meta/index.json) — end-to-end
-npx tsx src/lib/retrieval/query-cli.ts ./wiki/_meta/index.json "how does bond interest work" section-aware
+# answer over the manifest INGESTION emitted (wiki/_meta/index/manifest.json) — end-to-end
+npx tsx src/lib/retrieval/query-cli.ts ./wiki/_meta/index/manifest.json "how does bond interest work" section-aware
 ```
 
 ## Roadmap
@@ -71,9 +78,10 @@ npx tsx src/lib/retrieval/query-cli.ts ./wiki/_meta/index.json "how does bond in
    _(done)_
 4. **section-aware** — hybrid + backlink expansion + pinned boost + per-section
    diversification; sections inform ranking, never a hard filter. _(done)_
-5. **consume the emitted index** — load `wiki/_meta/index.json` from ingestion,
-   backfill missing embeddings, query it. Closes the ingest→retrieve loop
-   end-to-end (`release-index.ts`, `query-cli.ts`). _(done)_
+5. **consume the emitted release** — load `wiki/_meta/index/manifest.json` +
+   sidecars from ingestion, backfill missing vectors, query it. Closes the
+   ingest→retrieve loop end-to-end (`release-index.ts`, `query-cli.ts`).
+   _(done — and since the index.json freeze, the manifest is the ONLY path)_
 6. **hard section-selection** — _deferred._ A scale optimization that risks
    silently missing the right page; only worth it once wikis are large **and**
    ingestion emits the real section graph. Slots in behind the same interface.

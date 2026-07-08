@@ -7,6 +7,7 @@ export type ManifestEntry = {
     tags?: string[];
     links?: string[];
     pinned?: boolean;
+    contentHash?: string;
 };
 export type ManifestV2 = {
     version: 2;
@@ -14,10 +15,14 @@ export type ManifestV2 = {
     dimensions: number;
     pages: ManifestEntry[];
 };
+export type PagePassages = {
+    texts: string[];
+    vectors: number[][];
+} | null;
 export interface ManifestLoader {
     manifest: ManifestV2;
     getPageContent(path: string): Promise<string>;
-    getPassageVectors(path: string): Promise<number[][]>;
+    getPagePassages(path: string): Promise<PagePassages>;
     toPageDocs(): Promise<WikiDoc[]>;
 }
 export declare function loadManifest(opts: {

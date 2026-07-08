@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { evidenceGate } from "./evidence-gate.js";
-import { loadReleaseIndex, RELEASE_INDEX_PATH } from "./release-index.js";
+import { loadReleaseIndex, RELEASE_INDEX_V2_PATH } from "./release-index.js";
 import { buildStrategy } from "./strategies/index.js";
 // Agent-facing facade over the retrieval read path. The library exposes the parts
 // (loaders, swappable strategies, the evidence gate) on purpose so they can be
@@ -14,8 +14,8 @@ function resolveIndexPath(opts) {
     if (opts.path)
         return opts.path;
     if (opts.vault)
-        return join(opts.vault, RELEASE_INDEX_PATH);
-    return RELEASE_INDEX_PATH;
+        return join(opts.vault, RELEASE_INDEX_V2_PATH);
+    return RELEASE_INDEX_V2_PATH;
 }
 export class Retrieval {
     strategy;
@@ -28,11 +28,12 @@ export class Retrieval {
         });
         this.floor = opts.floor;
     }
-    // Load the index INGESTION emitted at release and return a ready-to-query
-    // instance. Uses the existing release-index loader, which loads index.json and
-    // backfills any missing embeddings in the index's own space; the same
-    // index-pinned embedder is then used to embed queries, so query and document
-    // vectors are comparable.
+    // Load the manifest + sidecars INGESTION emitted at release and return a
+    // ready-to-query instance. Uses the release-index loader, which backfills any
+    // missing passage vectors in the manifest's own space; the same
+    // manifest-pinned embedder is then used to embed queries, so query and
+    // document vectors are comparable. Throws when the manifest is missing —
+    // there is no fallback to the frozen index.json.
     static async fromReleaseIndex(opts = {}) {
         const { store, docs, embedder } = await loadReleaseIndex({
             path: resolveIndexPath(opts),

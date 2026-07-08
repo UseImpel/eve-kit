@@ -120,28 +120,12 @@ export async function queryWiki(
       vaultResolver: options?.vaultResolver,
     });
 
-    // Load the pre-built wiki index for this org.
-    // If the wiki doesn't exist, Retrieval.fromReleaseIndex will throw.
-    let retrieval: Retrieval;
-    try {
-      retrieval = await Retrieval.fromReleaseIndex({ vault });
-    } catch (err) {
-      // Missing wiki is treated gracefully: return empty results.
-      const durationMs = Date.now() - startMs;
-      const result: QueryWikiResult = {
-        chunks: [],
-        gate: { gated: true, reason: "no_results" },
-        meta: {
-          orgId,
-          strategy: "section-aware",
-          durationMs,
-        },
-      };
-      console.log(
-        `[queryWiki] orgId=${orgId} durationMs=${durationMs} gated=true reason=missing_wiki`
-      );
-      return result;
-    }
+    // Load the pre-built wiki manifest for this org. A missing/unreadable
+    // manifest THROWS (see the outer catch) — it used to be masked as
+    // "no results", which is indistinguishable from a healthy wiki that
+    // simply doesn't cover the query, and left agents answering as if the
+    // wiki were empty. Better the agent sees the real failure.
+    const retrieval = await Retrieval.fromReleaseIndex({ vault });
 
     // Run the retrieval with optional k and floor.
     const answer: RetrievalAnswer = await retrieval.query(query, {

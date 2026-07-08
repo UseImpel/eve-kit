@@ -1,16 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from "./embedder.js";
-import { embeddingInput } from "./index-builder.js";
-import { loadReleaseIndex, parseReleaseIndex } from "./release-index.js";
+import { serializeSidecar, sidecarFileName } from "./embedding-sidecar.js";
+import { loadReleaseIndex, RELEASE_INDEX_V2_PATH } from "./release-index.js";
 import { FlatEmbedStrategy } from "./strategies/flat-embed.js";
 import type { Embedder } from "./types.js";
 
 // Same token-hash fake as the other retrieval tests, sized to the real contract
-// dims so the loaded index matches EMBEDDING_DIMENSIONS (no drift warning).
+// dims so the loaded release matches EMBEDDING_DIMENSIONS (no drift warning).
 function fakeEmbedder(dims = EMBEDDING_DIMENSIONS): Embedder {
   return async (texts) =>
     texts.map((text) => {
@@ -27,61 +28,92 @@ function fakeEmbedder(dims = EMBEDDING_DIMENSIONS): Embedder {
     });
 }
 
-type EmittedDoc = {
-  path: string;
-  title: string;
-  content: string;
-  section?: string;
-  contentHash: string;
-  embedding?: number[];
-};
-
-// Emit an index in ingestion's release shape: bonds arrives pre-embedded, brand
-// ships WITHOUT a vector (the best-effort gateway gap retrieval must backfill).
-async function writeEmittedIndex(dir: string): Promise<string> {
-  const embed = fakeEmbedder();
-  const bonds = {
-    path: "finance/bonds.md",
-    title: "Bonds",
-    content: "A bond pays a coupon.",
-    section: "finance",
-    contentHash: "h1",
-  };
-  const brand = {
-    path: "marketing/brand.md",
-    title: "Brand",
-    content: "Brand voice is warm.",
-    section: "marketing",
-    contentHash: "h2",
-  };
-  const [bondsVec] = await embed([embeddingInput(bonds)]);
-  const docs: EmittedDoc[] = [
-    { ...bonds, embedding: bondsVec },
-    { ...brand }, // no embedding — must be backfilled on load
-  ];
-  const out = join(dir, "index.json");
-  await writeFile(
-    out,
-    JSON.stringify({
-      version: 1,
-      model: EMBEDDING_MODEL,
-      dimensions: EMBEDDING_DIMENSIONS,
-      docs,
-    })
-  );
-  return out;
+function sha256(input: string): string {
+  return createHash("sha256").update(input).digest("hex");
 }
 
-test("loadReleaseIndex backfills missing embeddings and serves queries", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "release-index-"));
+// Emit the release artifact in ingestion's REAL layout: pages in the wiki tree,
+// the v2 manifest at wiki/_meta/index/manifest.json, and binary passage-vector
+// sidecars keyed by contentHash. Bonds ships WITH a sidecar (carried), brand
+// WITHOUT one (the best-effort gateway gap retrieval must backfill).
+async function writeEmittedVault(root: string): Promise<string> {
+  const embed = fakeEmbedder();
+  const bondsContent = "A bond pays a coupon.";
+  const brandContent = "Brand voice is warm.";
+  const bondsHash = sha256(bondsContent);
+
+  await mkdir(join(root, "wiki", "finance"), { recursive: true });
+  await mkdir(join(root, "wiki", "marketing"), { recursive: true });
+  await writeFile(join(root, "wiki", "finance", "bonds.md"), bondsContent);
+  await writeFile(join(root, "wiki", "marketing", "brand.md"), brandContent);
+
+  const [bondsVec] = await embed([`Bonds\n\n${bondsContent}`]);
+  const sidecarRel = sidecarFileName(
+    bondsHash,
+    EMBEDDING_MODEL,
+    EMBEDDING_DIMENSIONS
+  );
+  const sidecarAbs = join(root, "wiki", "_meta", "embeddings", sidecarRel);
+  await mkdir(dirname(sidecarAbs), { recursive: true });
+  await writeFile(
+    sidecarAbs,
+    serializeSidecar({
+      manifest: {
+        modelId: EMBEDDING_MODEL,
+        dimensions: EMBEDDING_DIMENSIONS,
+        passageCount: 1,
+        passages: [{ index: 0, charOffset: 0, charLength: bondsContent.length }],
+      },
+      vectors: [bondsVec],
+    })
+  );
+
+  const manifestPath = join(root, RELEASE_INDEX_V2_PATH);
+  await mkdir(dirname(manifestPath), { recursive: true });
+  await writeFile(
+    manifestPath,
+    JSON.stringify({
+      version: 2,
+      model: EMBEDDING_MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      // `docs` only, no `pages` mirror — the shape older manifests actually
+      // have on disk; the loader must not require the mirror.
+      docs: [
+        {
+          path: "wiki/finance/bonds.md",
+          title: "Bonds",
+          section: "finance",
+          contentHash: bondsHash,
+        },
+        {
+          path: "wiki/marketing/brand.md",
+          title: "Brand",
+          section: "marketing",
+          pinned: true,
+          contentHash: sha256(brandContent),
+          // Unknown producer-declared field — must ride along harmlessly.
+          reviewedBy: "someone",
+        },
+      ],
+    })
+  );
+  return manifestPath;
+}
+
+test("loadReleaseIndex reads the real layout: sidecar carried, missing sidecar backfilled", async () => {
+  const root = await mkdtemp(join(tmpdir(), "release-manifest-"));
   try {
-    const path = await writeEmittedIndex(dir);
+    const manifestPath = await writeEmittedVault(root);
     const embedder = fakeEmbedder();
-    const { store, docs, stats } = await loadReleaseIndex({ path, embedder });
+    const { store, docs, stats } = await loadReleaseIndex({
+      path: manifestPath,
+      embedder,
+    });
 
     assert.equal(stats.total, 2);
-    assert.equal(stats.carried, 1); // bonds came pre-embedded
-    assert.equal(stats.backfilled, 1); // brand was embedded on load
+    assert.equal(stats.format, "v2");
+    assert.equal(stats.carried, 1); // bonds' passage came from its sidecar
+    assert.equal(stats.backfilled, 1); // brand had no sidecar — embedded on load
     assert.equal(store.size(), 2);
     assert.ok(docs.every((d) => d.embedding.length === EMBEDDING_DIMENSIONS));
 
@@ -89,50 +121,97 @@ test("loadReleaseIndex backfills missing embeddings and serves queries", async (
     const result = await new FlatEmbedStrategy({ embedder, store }).retrieve({
       query: "bond coupon",
     });
-    assert.equal(result.chunks[0]?.path, "finance/bonds.md");
+    assert.equal(result.chunks[0]?.path, "wiki/finance/bonds.md");
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
   }
 });
 
-test("parseReleaseIndex rejects an unsupported version", () => {
-  assert.throws(
-    () => parseReleaseIndex(JSON.stringify({ version: 2, docs: [] })),
-    /unsupported release index version/
-  );
+test("loadReleaseIndex preserves section + pinned from the manifest", async () => {
+  const root = await mkdtemp(join(tmpdir(), "release-manifest-"));
+  try {
+    const manifestPath = await writeEmittedVault(root);
+    const { docs } = await loadReleaseIndex({
+      path: manifestPath,
+      embedder: fakeEmbedder(),
+    });
+    const brand = docs.find((d) => d.path === "wiki/marketing/brand.md");
+    assert.equal(brand?.section, "marketing");
+    assert.equal(brand?.pinned, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
-test("loadReleaseIndex preserves section + pinned from the emitted index", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "release-index-"));
+test("loadReleaseIndex maps a legacy index.json path to the manifest beside it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "release-manifest-"));
   try {
-    const embedder = fakeEmbedder();
-    const [vec] = await embedder([
-      embeddingInput({ path: "concepts/pinned.md", title: "Pinned", content: "x" }),
-    ]);
-    const out = join(dir, "index.json");
-    await writeFile(
-      out,
-      JSON.stringify({
-        version: 1,
-        model: EMBEDDING_MODEL,
-        dimensions: EMBEDDING_DIMENSIONS,
-        docs: [
-          {
-            path: "concepts/pinned.md",
-            title: "Pinned",
-            content: "x",
-            section: "concepts",
-            pinned: true,
-            contentHash: "h",
-            embedding: vec,
-          },
-        ],
-      })
-    );
-    const { docs } = await loadReleaseIndex({ path: out, embedder });
-    assert.equal(docs[0]?.section, "concepts");
-    assert.equal(docs[0]?.pinned, true);
+    await writeEmittedVault(root);
+    // Callers still configured with the retired path must land on the manifest,
+    // never on the frozen file itself.
+    const { stats } = await loadReleaseIndex({
+      path: join(root, "wiki", "_meta", "index.json"),
+      embedder: fakeEmbedder(),
+    });
+    assert.equal(stats.total, 2);
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("loadReleaseIndex hard-errors on a missing manifest — no fallback to index.json", async () => {
+  const root = await mkdtemp(join(tmpdir(), "release-manifest-"));
+  try {
+    // A frozen index.json is present, the manifest is not: the load must FAIL,
+    // not quietly serve the frozen corpus.
+    await mkdir(join(root, "wiki", "_meta"), { recursive: true });
+    await writeFile(
+      join(root, "wiki", "_meta", "index.json"),
+      JSON.stringify({ version: 1, docs: [] })
+    );
+    await assert.rejects(
+      loadReleaseIndex({
+        path: join(root, RELEASE_INDEX_V2_PATH),
+        embedder: fakeEmbedder(),
+      }),
+      /manifest v2 not found/
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("loadReleaseIndex hard-errors on a corrupt manifest", async () => {
+  const root = await mkdtemp(join(tmpdir(), "release-manifest-"));
+  try {
+    const manifestPath = await writeEmittedVault(root);
+    await writeFile(manifestPath, "{ not json");
+    await assert.rejects(
+      loadReleaseIndex({ path: manifestPath, embedder: fakeEmbedder() }),
+      /unreadable/
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("loadReleaseIndex backfills when page content drifted from its contentHash", async () => {
+  const root = await mkdtemp(join(tmpdir(), "release-manifest-"));
+  try {
+    const manifestPath = await writeEmittedVault(root);
+    // Edit bonds AFTER its sidecar was written: the sidecar's vectors describe
+    // text that no longer exists, so they must be ignored and re-embedded.
+    await writeFile(
+      join(root, "wiki", "finance", "bonds.md"),
+      "A bond pays a coupon. Yields move inversely to price."
+    );
+    const { stats } = await loadReleaseIndex({
+      path: manifestPath,
+      embedder: fakeEmbedder(),
+    });
+    assert.equal(stats.carried, 0);
+    assert.equal(stats.backfilled, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

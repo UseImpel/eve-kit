@@ -18,3 +18,4 @@ export * from "./helpers.js";
 export * from "./load-wiki.js";
 export * from "./passage-splitter.js";
 export * from "./manifest-loader.js";
+export * from "./embedding-sidecar.js";

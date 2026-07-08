@@ -1,15 +1,15 @@
-// Side-by-side strategy comparison over the index INGESTION emitted
-// (wiki/_meta/index.json) — evals the REAL released vectors, not a fresh build, so
-// the numbers reflect what retrieval actually serves. Loads the index (backfilling
-// any docs that shipped without an embedding), then scores every strategy over it.
-// Not part of the app build.
+// Side-by-side strategy comparison over the manifest INGESTION emitted
+// (wiki/_meta/index/manifest.json) — evals the REAL released vectors, not a
+// fresh build, so the numbers reflect what retrieval actually serves. Loads the
+// manifest + sidecars (backfilling any pages that shipped without one), then
+// scores every strategy over it. Not part of the app build.
 //
-//   npx tsx src/lib/retrieval/eval-cli.ts <index.json> <queries.json>
+//   npx tsx src/lib/retrieval/eval-cli.ts <manifest.json> <queries.json>
 //
 // queries.json: [{ "query": "...", "expectedPath": "finance/bonds.md" }, ...]
 //   omit expectedPath to mark a query out-of-corpus (it should abstain).
-// Needs the AI Gateway / OpenAI credentials to embed the queries (and any docs the
-// index shipped without a vector).
+// Needs the AI Gateway / OpenAI credentials to embed the queries (and any pages
+// the release shipped without a sidecar).
 import { readFile } from "node:fs/promises";
 import { loadReleaseIndex } from "./release-index.js";
 import { compareStrategies, type LabeledQuery } from "./eval.js";
@@ -19,7 +19,7 @@ async function main() {
   const [indexPath, queriesPath] = process.argv.slice(2);
   if (!indexPath || !queriesPath) {
     console.error(
-      "usage: npx tsx src/lib/retrieval/eval-cli.ts <index.json> <queries.json>"
+      "usage: npx tsx src/lib/retrieval/eval-cli.ts <manifest.json> <queries.json>"
     );
     process.exit(1);
   }

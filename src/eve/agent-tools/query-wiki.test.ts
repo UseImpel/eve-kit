@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queryWiki, resolveWikiVault, type QueryWikiResult } from "./query-wiki.js";
+import { queryWiki, resolveWikiVault } from "./query-wiki.js";
 
 test("resolveWikiVault uses an injected resolver function", () => {
   const vault = resolveWikiVault("tenant-alpha", {
@@ -37,39 +37,28 @@ test("resolveWikiVault falls back to the org convention", () => {
   assert.equal(vault, "wikis/tenant-delta");
 });
 
-test("queryWiki missing wiki returns gracefully", async () => {
-  const result = await queryWiki("tenant-alpha", "payroll policy", {
-    vaultResolver: {
-      "tenant-alpha": "/nonexistent/vault/tenant-alpha",
-    },
-  });
-
-  assert.equal(result.chunks.length, 0, "Missing wiki should return empty chunks");
-  assert.equal(result.gate.gated, true, "Gate should be gated on empty results");
-  assert.equal(result.gate.reason, "no_results", "Reason should be no_results");
-  assert.equal(result.meta.orgId, "tenant-alpha", "Meta should include orgId");
-  assert.ok(result.meta.durationMs >= 0, "Meta should include durationMs");
+// A wiki whose manifest can't be loaded must FAIL, not answer. The old
+// behaviour (empty chunks + gated: no_results) was indistinguishable from a
+// healthy wiki that doesn't cover the query, so agents kept answering as if
+// the wiki were empty — the frozen-index bug family.
+test("queryWiki throws loudly when the wiki manifest is missing", async () => {
+  await assert.rejects(
+    queryWiki("tenant-alpha", "payroll policy", {
+      vaultResolver: {
+        "tenant-alpha": "/nonexistent/vault/tenant-alpha",
+      },
+    }),
+    /manifest v2 not found/
+  );
 });
 
-test("queryWiki result has required structure", async () => {
-  const result: QueryWikiResult = await queryWiki("tenant-alpha", "test", {
-    vaultResolver: () => "/nonexistent/vault/tenant-alpha",
-  });
-
-  // Even with empty chunks, the structure should be valid.
-  assert.ok(Array.isArray(result.chunks), "chunks should be an array");
-  assert.ok(result.gate, "gate should be present");
-  assert.ok(result.meta, "meta should be present");
-  assert.ok(typeof result.meta.durationMs === "number", "durationMs should be a number");
-  assert.equal(result.meta.orgId, "tenant-alpha", "orgId should be in meta");
-});
-
-test("queryWiki accepts optional parameters", async () => {
-  const result = await queryWiki("tenant-alpha", "test query", {
-    k: 10,
-    floor: 0.5,
-    vaultResolver: () => "/nonexistent/vault/tenant-alpha",
-  });
-
-  assert.ok(result, "Should handle options without error");
+test("queryWiki propagates the manifest error with optional parameters set", async () => {
+  await assert.rejects(
+    queryWiki("tenant-alpha", "test query", {
+      k: 10,
+      floor: 0.5,
+      vaultResolver: () => "/nonexistent/vault/tenant-alpha",
+    }),
+    /manifest v2 not found/
+  );
 });
