@@ -3,6 +3,9 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 export interface RunTokenPayload {
   orgId: string;
   runId: string;
+  impelUserId?: string;
+  liveblocksUserId?: string;
+  agentId?: string;
   /**
    * Expiration time as Unix epoch seconds.
    */
@@ -12,6 +15,9 @@ export interface RunTokenPayload {
 export interface VerifiedRunToken {
   orgId: string;
   runId: string;
+  impelUserId?: string;
+  liveblocksUserId?: string;
+  agentId?: string;
 }
 
 export type RunTokenErrorCode =
@@ -45,6 +51,13 @@ export function signRunToken(payload: RunTokenPayload, secret: string): string {
     JSON.stringify({
       orgId: normalized.orgId,
       runId: normalized.runId,
+      ...(normalized.impelUserId
+        ? { impelUserId: normalized.impelUserId }
+        : {}),
+      ...(normalized.liveblocksUserId
+        ? { liveblocksUserId: normalized.liveblocksUserId }
+        : {}),
+      ...(normalized.agentId ? { agentId: normalized.agentId } : {}),
       exp: normalized.exp,
     }),
   );
@@ -85,7 +98,15 @@ export function verifyRunToken(
     throwRunTokenError("expired", "Run token has expired.");
   }
 
-  return { orgId: payload.orgId, runId: payload.runId };
+  return {
+    orgId: payload.orgId,
+    runId: payload.runId,
+    ...(payload.impelUserId ? { impelUserId: payload.impelUserId } : {}),
+    ...(payload.liveblocksUserId
+      ? { liveblocksUserId: payload.liveblocksUserId }
+      : {}),
+    ...(payload.agentId ? { agentId: payload.agentId } : {}),
+  };
 }
 
 function normalizeRunTokenPayload(payload: RunTokenPayload): RunTokenPayload {
@@ -95,6 +116,9 @@ function normalizeRunTokenPayload(payload: RunTokenPayload): RunTokenPayload {
 
   const orgId = readNonEmptyString(payload.orgId);
   const runId = readNonEmptyString(payload.runId);
+  const impelUserId = readNonEmptyString(payload.impelUserId);
+  const liveblocksUserId = readNonEmptyString(payload.liveblocksUserId);
+  const agentId = readNonEmptyString(payload.agentId);
   const exp = payload.exp;
   if (!orgId || !runId || !Number.isFinite(exp)) {
     throwRunTokenError(
@@ -103,7 +127,14 @@ function normalizeRunTokenPayload(payload: RunTokenPayload): RunTokenPayload {
     );
   }
 
-  return { orgId, runId, exp };
+  return {
+    orgId,
+    runId,
+    ...(impelUserId ? { impelUserId } : {}),
+    ...(liveblocksUserId ? { liveblocksUserId } : {}),
+    ...(agentId ? { agentId } : {}),
+    exp,
+  };
 }
 
 function parseRunTokenPayload(payloadPart: string): RunTokenPayload {

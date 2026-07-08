@@ -1,6 +1,9 @@
 export interface RunTokenPayload {
     orgId: string;
     runId: string;
+    impelUserId?: string;
+    liveblocksUserId?: string;
+    agentId?: string;
     /**
      * Expiration time as Unix epoch seconds.
      */
@@ -9,6 +12,9 @@ export interface RunTokenPayload {
 export interface VerifiedRunToken {
     orgId: string;
     runId: string;
+    impelUserId?: string;
+    liveblocksUserId?: string;
+    agentId?: string;
 }
 export type RunTokenErrorCode = "invalid_payload" | "invalid_secret" | "invalid_token" | "invalid_signature" | "expired";
 export declare class RunTokenError extends Error {

@@ -18,6 +18,13 @@ export function signRunToken(payload, secret) {
     const payloadPart = base64UrlEncode(JSON.stringify({
         orgId: normalized.orgId,
         runId: normalized.runId,
+        ...(normalized.impelUserId
+            ? { impelUserId: normalized.impelUserId }
+            : {}),
+        ...(normalized.liveblocksUserId
+            ? { liveblocksUserId: normalized.liveblocksUserId }
+            : {}),
+        ...(normalized.agentId ? { agentId: normalized.agentId } : {}),
         exp: normalized.exp,
     }));
     const signingInput = `${RUN_TOKEN_VERSION}.${payloadPart}`;
@@ -47,7 +54,15 @@ export function verifyRunToken(token, secret, now = Math.floor(Date.now() / 1000
     if (payload.exp <= now) {
         throwRunTokenError("expired", "Run token has expired.");
     }
-    return { orgId: payload.orgId, runId: payload.runId };
+    return {
+        orgId: payload.orgId,
+        runId: payload.runId,
+        ...(payload.impelUserId ? { impelUserId: payload.impelUserId } : {}),
+        ...(payload.liveblocksUserId
+            ? { liveblocksUserId: payload.liveblocksUserId }
+            : {}),
+        ...(payload.agentId ? { agentId: payload.agentId } : {}),
+    };
 }
 function normalizeRunTokenPayload(payload) {
     if (!isRecord(payload)) {
@@ -55,11 +70,21 @@ function normalizeRunTokenPayload(payload) {
     }
     const orgId = readNonEmptyString(payload.orgId);
     const runId = readNonEmptyString(payload.runId);
+    const impelUserId = readNonEmptyString(payload.impelUserId);
+    const liveblocksUserId = readNonEmptyString(payload.liveblocksUserId);
+    const agentId = readNonEmptyString(payload.agentId);
     const exp = payload.exp;
     if (!orgId || !runId || !Number.isFinite(exp)) {
         throwRunTokenError("invalid_payload", "Run token payload requires orgId, runId, and exp.");
     }
-    return { orgId, runId, exp };
+    return {
+        orgId,
+        runId,
+        ...(impelUserId ? { impelUserId } : {}),
+        ...(liveblocksUserId ? { liveblocksUserId } : {}),
+        ...(agentId ? { agentId } : {}),
+        exp,
+    };
 }
 function parseRunTokenPayload(payloadPart) {
     try {

@@ -1,5 +1,5 @@
 import { claudeCode, } from "ai-sdk-provider-claude-code";
-import { impelGatewayClaudeModel } from "./gateway-model.js";
+import { impelGatewayClaudeModel, impelGatewayCodexModel, resolveImpelGatewayUrl, } from "./gateway-model.js";
 import { impelInference, } from "../index.js";
 export const IMPEL_CLAUDE_CONTEXT_WINDOW_TOKENS = 200000;
 export const IMPEL_DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";
@@ -90,7 +90,7 @@ function allowLocalProviderFallback(explicit) {
     return process.env.NODE_ENV !== "production";
 }
 export function createImpelClaudeModel(options = {}) {
-    const { modelId: explicitModelId, defaultModelId, localModel, defaultLocalModel = "opus", providerOptions, localProviderOptions, permissionMode, allowDangerouslySkipPermissions, effort, cwd, allowLocalProviderFallback: explicitAllowLocalProviderFallback, gatewayUrl: explicitGatewayUrl, gatewayPat: explicitGatewayPat, provider = "claude-code", ...inferenceOptions } = options;
+    const { modelId: explicitModelId, defaultModelId, localModel, defaultLocalModel = "opus", providerOptions, localProviderOptions, permissionMode, allowDangerouslySkipPermissions, effort, cwd, allowLocalProviderFallback: explicitAllowLocalProviderFallback, gatewayUrl: explicitGatewayUrl, gatewayAuthToken: explicitGatewayAuthToken, gatewayPat: explicitGatewayPat, provider = "claude-code", ...inferenceOptions } = options;
     const modelId = resolveImpelClaudeModelId({
         modelId: explicitModelId,
         defaultModelId,
@@ -102,13 +102,18 @@ export function createImpelClaudeModel(options = {}) {
         effort,
         cwd,
     });
-    const gatewayUrl = explicitGatewayUrl ?? process.env.IMPEL_GATEWAY_URL;
-    const gatewayPat = explicitGatewayPat ?? process.env.IMPEL_GATEWAY_PAT;
-    if (gatewayUrl && gatewayPat) {
+    const gatewayUrl = resolveImpelGatewayUrl(explicitGatewayUrl);
+    if (gatewayUrl) {
         return impelGatewayClaudeModel(modelId, {
             gatewayUrl,
-            pat: gatewayPat,
+            authToken: explicitGatewayAuthToken ??
+                explicitGatewayPat ??
+                process.env.IMPEL_GATEWAY_AUTH_TOKEN ??
+                process.env.IMPEL_GATEWAY_PAT,
             providerOptions: resolvedProviderOptions,
+            localModel,
+            defaultLocalModel,
+            runContext: inferenceOptions.runContext,
         });
     }
     if (inferenceOptions.baseUrl ?? process.env.IMPEL_INFERENCE_URL) {
@@ -135,10 +140,10 @@ export function createImpelClaudeModel(options = {}) {
     if (isDeployedServerlessRuntime() &&
         process.env.IMPEL_ALLOW_CLAUDE_CODE_FALLBACK !== "1") {
         throw new Error("IMPEL_INFERENCE_URL is not set — this deployed agent cannot reach " +
-            "impel-inference, and the local claude-code provider only works in local " +
+            "impel-gateway or impel-inference, and the local claude-code provider only works in local " +
             "development (it requires the Claude Code CLI and Anthropic OAuth " +
             "credentials, which do not exist in a Vercel serverless runtime). Set " +
-            "IMPEL_INFERENCE_URL (and IMPEL_INFERENCE_API_KEY) on this deployment, or " +
+            "IMPEL_GATEWAY_URL on this deployment, or " +
             "set IMPEL_ALLOW_CLAUDE_CODE_FALLBACK=1 to force the local provider.");
     }
     // Independent fallback gate (keyed on NODE_ENV / explicit option /
@@ -146,18 +151,34 @@ export function createImpelClaudeModel(options = {}) {
     // runtimes that isDeployedServerlessRuntime() cannot detect, and lets callers
     // force-disable the local provider via `allowLocalProviderFallback: false`.
     if (!allowLocalProviderFallback(explicitAllowLocalProviderFallback)) {
-        throw new Error("IMPEL_INFERENCE_URL or baseUrl is required for createImpelClaudeModel in production. Set IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK=true only for explicit local development.");
+        throw new Error("IMPEL_GATEWAY_URL, IMPEL_INFERENCE_URL, or baseUrl is required for createImpelClaudeModel in production. Set IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK=true only for explicit local development.");
     }
     return claudeCode(localModel ?? inferClaudeCodeLocalModel(modelId, defaultLocalModel), { ...resolvedProviderOptions, ...(localProviderOptions ?? {}) });
 }
 export function createImpelCodexModel(options = {}) {
-    const { modelId: explicitModelId, defaultModelId, providerOptions, approvalMode, sandboxMode, skipGitRepoCheck, effort, gatewayUrl: _gatewayUrl, gatewayPat: _gatewayPat, ...inferenceOptions } = options;
+    const { modelId: explicitModelId, defaultModelId, providerOptions, approvalMode, sandboxMode, skipGitRepoCheck, effort, gatewayUrl, gatewayAuthToken, gatewayPat, ...inferenceOptions } = options;
     const modelId = resolveImpelCodexModelId({
         modelId: explicitModelId,
         defaultModelId,
     });
-    // Codex gateway mode is not implemented yet; keep the existing
-    // impel-inference path while stripping gateway-only options from the request.
+    const resolvedGatewayUrl = resolveImpelGatewayUrl(gatewayUrl);
+    if (resolvedGatewayUrl) {
+        return impelGatewayCodexModel(modelId, {
+            gatewayUrl: resolvedGatewayUrl,
+            authToken: gatewayAuthToken ??
+                gatewayPat ??
+                process.env.IMPEL_GATEWAY_AUTH_TOKEN ??
+                process.env.IMPEL_GATEWAY_PAT,
+            providerOptions: createImpelCodexProviderOptions({
+                providerOptions,
+                approvalMode,
+                sandboxMode,
+                skipGitRepoCheck,
+                effort,
+            }),
+            runContext: inferenceOptions.runContext,
+        });
+    }
     return impelInference(modelId, {
         ...inferenceOptions,
         provider: "codex-app-server",

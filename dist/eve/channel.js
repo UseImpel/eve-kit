@@ -114,7 +114,28 @@ export function normalizeImpelEveRunContext(value) {
         traceId: readString(value.traceId),
         agent: isRecord(value.agent) ? value.agent : undefined,
         btParent: readString(value.btParent),
+        workspaceSeed: parseWorkspaceSeed(value.workspaceSeed),
     });
+}
+// Defensive parse of the Phase 2 inline workspace seed. Returns undefined unless
+// it carries a non-empty agentId and at least one { path, content } file.
+function parseWorkspaceSeed(value) {
+    if (!isRecord(value))
+        return undefined;
+    const agentId = readString(value.agentId);
+    if (!agentId || !Array.isArray(value.files))
+        return undefined;
+    const files = [];
+    for (const entry of value.files) {
+        if (!isRecord(entry))
+            continue;
+        const path = readString(entry.path);
+        if (!path || typeof entry.content !== "string")
+            continue;
+        const enc = entry.enc === "base64" ? "base64" : "utf8";
+        files.push({ path, content: entry.content, enc });
+    }
+    return files.length > 0 ? { agentId, files } : undefined;
 }
 export function normalizeClientContextMessages(value) {
     if (value === undefined)
@@ -149,6 +170,18 @@ export async function prepareImpelEveWorkspace(state, options) {
         const referenceRepos = normalizeReferenceRepos(options.referenceRepos);
         if (runContext && referenceRepos.length) {
             await prepareReferenceRepoAccess(state, runContext, referenceRepos, options);
+        }
+        // Phase 2 [UNVERIFIED]: materialize an inline draft bundle into /workspace
+        // (the live-editor path, whose source is the caller's uncommitted draft — no
+        // repo to check out). Best-effort: a failure leaves an empty workspace and
+        // the model falls back to the prompt snapshot, exactly as today.
+        if (runContext?.workspaceSeed?.files.length) {
+            try {
+                await materializeWorkspaceSeed(await options.getSandbox(), runContext.workspaceSeed);
+            }
+            catch {
+                // best-effort — model falls back to the snapshot.
+            }
         }
         return;
     }
@@ -211,6 +244,38 @@ export async function prepareImpelEveWorkspace(state, options) {
         await writeCheckoutFailureMarker(sandbox, message).catch(() => { });
         throw error;
     }
+}
+// Phase 2 [UNVERIFIED]: write inline seed files into /workspace/agents/<id>/ so
+// the model reads the real, UNTRUNCATED draft bundle. Path traversal is stripped
+// so a seed can only ever land under the agent root. Content rides the shell as
+// base64 (utf8 seeds are re-encoded) so any bytes survive.
+async function materializeWorkspaceSeed(sandbox, seed) {
+    const root = `/workspace/agents/${safeSeedSegment(seed.agentId)}`;
+    await sandbox.run({ command: `mkdir -p '${root}'` });
+    for (const file of seed.files) {
+        const rel = normalizeSeedPath(file.path);
+        if (!rel)
+            continue;
+        const abs = `${root}/${rel}`;
+        const dir = abs.slice(0, abs.lastIndexOf("/"));
+        const b64 = file.enc === "base64"
+            ? file.content.replace(/[^A-Za-z0-9+/=]/g, "")
+            : Buffer.from(file.content, "utf8").toString("base64");
+        await sandbox.run({
+            command: `mkdir -p '${dir}' && printf '%s' '${b64}' | base64 -d > '${abs}'`,
+        });
+    }
+}
+function safeSeedSegment(value) {
+    return value.replace(/[^A-Za-z0-9._-]/g, "-") || "agent";
+}
+// Strip leading slashes, `.` and `..` so a seed path only lands under the root.
+function normalizeSeedPath(path) {
+    const parts = path
+        .split("/")
+        .map((segment) => segment.trim())
+        .filter((segment) => segment && segment !== "." && segment !== "..");
+    return parts.length ? parts.join("/") : null;
 }
 /** Best-effort `/workspace/CHECKOUT_FAILED.md` so `ls /workspace` tells the
  * story even when the failure event itself never reaches the run. */

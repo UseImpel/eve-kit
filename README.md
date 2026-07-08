@@ -1,6 +1,6 @@
 # @useimpel/eve-kit
 
-Eve helpers and AI SDK provider for Impel's durable inference service.
+Eve helpers and AI SDK providers for Impel gateway-backed agents.
 
 The root package exports `impelInference`, an AI SDK `LanguageModelV3`
 provider. Eve-specific glue lives under `/eve` subpaths so each agent can keep
@@ -10,7 +10,7 @@ the normal Eve filesystem layout: `agent.ts`, `channels/`, `sandbox/`,
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.42.tar.gz
+npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.50.tar.gz
 ```
 
 ## Eve Usage
@@ -61,15 +61,16 @@ export default createImpelBraintrustEvalConfig({
 });
 ```
 
-The helper selects `impel-inference` when `IMPEL_INFERENCE_URL` or `baseUrl` is
-configured. Without an inference URL, local `claudeCode(...)` fallback is allowed
-only outside `NODE_ENV=production`, or when
+The helper selects `impel-gateway` when `IMPEL_GATEWAY_URL` or `gatewayUrl` is
+configured. Without a gateway or inference URL, local `claudeCode(...)` fallback
+is allowed only outside `NODE_ENV=production`, or when
 `IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK=true` / `allowLocalProviderFallback: true`
 is set for explicit local development.
 
-Claude uses hosted `/v1/model/stream`. That path routes through the Claude Code
-gateway, where `impel-inference` owns Claude access-token resolution and refresh
-centrally.
+Claude uses the gateway Anthropic-compatible endpoint at `/anthropic`. Hosted
+Eve calls should carry the signed `clientContext.runToken`; static
+`IMPEL_GATEWAY_AUTH_TOKEN`, `IMPEL_GATEWAY_PAT`, or `gatewayAuthToken` auth is
+accepted for local tooling and break-glass use.
 
 ## Root Provider
 
@@ -97,8 +98,8 @@ responsible for replaying reasoning blocks back to the model.
 ## Codex Eve Helper
 
 Use `createImpelCodexModel` when an Eve agent or declared subagent should run
-Codex through `impel-inference` directly, instead of constructing the generic
-provider by hand:
+Codex through `impel-gateway`, instead of constructing the generic provider by
+hand:
 
 ```ts
 import {
@@ -118,15 +119,18 @@ export default defineAgent({
 });
 ```
 
-The helper defaults to `IMPEL_CODEX_MODEL_ID` or `gpt-5.5` and calls hosted
-`/v1/model/stream`. That path lets `impel-inference` own ChatGPT token bootstrap
-and refresh through Codex app-server. It sends `provider: "codex-app-server"`
-and applies the autonomous Codex defaults `approvalMode: "never"`, `sandboxMode:
-"workspace-write"`, and `skipGitRepoCheck: true`. Override those values only
-when the host runtime needs a stricter mode.
+The helper defaults to `IMPEL_CODEX_MODEL_ID` or `gpt-5.5` and configures Codex
+app-server with `model_provider = "impel"` at
+`/chatgpt_passthrough/backend-api/codex`. It applies the autonomous Codex
+defaults `approvalMode: "never"`, `sandboxMode: "workspace-write"`, and
+`skipGitRepoCheck: true`. Override those values only when the host runtime needs
+a stricter mode.
 
 The provider reads these environment variables by default:
 
+- `IMPEL_GATEWAY_URL`
+- `IMPEL_GATEWAY_AUTH_TOKEN`
+- `IMPEL_GATEWAY_PAT`
 - `IMPEL_INFERENCE_URL`
 - `IMPEL_INFERENCE_API_KEY`
 - `IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK`
@@ -138,15 +142,17 @@ The provider reads these environment variables by default:
 - `IMPEL_RUN_TRACE_ID`
 - `IMPEL_RUN_AGENT`
 
-You can override `baseUrl`, `apiKey`, `orgId`, request `headers`, and
-`runContext` in code.
+You can override `gatewayUrl`, `gatewayAuthToken`, `baseUrl`, `apiKey`, `orgId`,
+request `headers`, and `runContext` in code.
 
 ## Auth
 
 This package does not contain credentials and does not grant access to
-`impel-inference`. Every inference request requires a bearer token via `apiKey`
-or `IMPEL_INFERENCE_API_KEY`; calls fail locally before `fetch` when the key is
-missing. The service also enforces the bearer token on `/v1/model/stream`.
+`impel-gateway`. Gateway requests require either a signed Eve
+`clientContext.runToken`, `IMPEL_RUN_TOKEN`, `gatewayAuthToken`,
+`IMPEL_GATEWAY_AUTH_TOKEN`, `IMPEL_GATEWAY_PAT`, or `IMPEL_PAT`. Legacy
+`impel-inference` fallback still requires `apiKey` or
+`IMPEL_INFERENCE_API_KEY`.
 
 The default Eve HTTP channel enables `localDev()`, `vercelOidc()`, and Basic
 auth from `EVE_APP_BASIC_USER`/`EVE_APP_BASIC_PASSWORD` or
@@ -163,9 +169,10 @@ Client context:
 {"orgId":"...","repos":["UseImpel/next"],"branch":"main"}
 ```
 
-This provider extracts that sentinel and forwards `orgId`, `repos`, `branch`,
-`installationId`, `runId`, `traceId`, and `agent` to `impel-inference`. That
-keeps per-run repository and trace context out of global process state.
+This provider extracts that sentinel and uses `clientContext.runToken` as the
+gateway bearer token, while scrubbing the literal token from text sent to the
+model. The legacy inference fallback still forwards `orgId`, `repos`, `branch`,
+`installationId`, `runId`, `traceId`, and `agent` to `/v1/model/stream`.
 
 ## OpenTelemetry Headers
 

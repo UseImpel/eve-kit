@@ -1,7 +1,7 @@
 {
   "name": "@useimpel/eve-kit",
-  "version": "0.2.49",
-  "description": "Eve helpers and AI SDK provider for Impel's durable inference service.",
+  "version": "0.2.50",
+  "description": "Eve helpers and AI SDK provider for Impel gateway-backed agents.",
   "type": "module",
   "repository": {
     "type": "git",
@@ -111,7 +111,9 @@
   "dependencies": {
     "@ai-sdk/xai": "^4.0.3",
     "@ai-sdk/provider-utils": "5.0.0-beta.49",
+    "@openai/codex": "^0.143.0",
     "@vercel/connect": "0.2.2",
+    "ai-sdk-provider-codex-cli": "1.2.2",
     "ai": "7.0.0-beta.178",
     "zod": "4.4.3"
   },
@@ -136,6 +138,7 @@
     "@ai-sdk/provider": "4.0.0-beta.19",
     "@types/node": "^24.5.2",
     "ai-sdk-provider-claude-code": "3.5.0",
+    "ai-sdk-provider-codex-cli": "1.2.2",
     "braintrust": "^3.18.0",
     "eve": "^0.11.6",
     "just-bash": "3.0.1",

@@ -31,6 +31,14 @@ export interface ImpelEveRunContext {
     traceId?: string;
     agent?: Record<string, unknown>;
     btParent?: string;
+    workspaceSeed?: {
+        agentId: string;
+        files: Array<{
+            path: string;
+            content: string;
+            enc?: "utf8" | "base64";
+        }>;
+    };
 }
 export interface ImpelPreparedRepo {
     repo: string;

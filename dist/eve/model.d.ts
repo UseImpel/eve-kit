@@ -21,6 +21,7 @@ export interface ImpelClaudeModelOptions extends Omit<ImpelInferenceOptions, "pr
     defaultLocalModel?: ClaudeCodeModelId;
     allowLocalProviderFallback?: boolean;
     gatewayUrl?: string;
+    gatewayAuthToken?: string;
     gatewayPat?: string;
     headers?: ImpelInferenceHeaders;
     runContext?: ImpelInferenceRunContextProvider;
@@ -36,6 +37,7 @@ export interface ImpelCodexModelOptions extends Omit<ImpelInferenceOptions, "pro
     modelId?: string;
     defaultModelId?: string;
     gatewayUrl?: string;
+    gatewayAuthToken?: string;
     gatewayPat?: string;
     headers?: ImpelInferenceHeaders;
     runContext?: ImpelInferenceRunContextProvider;

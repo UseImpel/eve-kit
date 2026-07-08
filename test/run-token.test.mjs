@@ -23,6 +23,28 @@ test("run token round-trips verified identity", () => {
   });
 });
 
+test("run token round-trips user and agent attribution claims", () => {
+  const token = signRunToken(
+    {
+      orgId: "org_123",
+      runId: "run_123",
+      impelUserId: "usr_123",
+      liveblocksUserId: "lb_123",
+      agentId: "research-agent",
+      exp: 2_000,
+    },
+    "secret-a",
+  );
+
+  assert.deepEqual(verifyRunToken(token, "secret-a", 1_000), {
+    orgId: "org_123",
+    runId: "run_123",
+    impelUserId: "usr_123",
+    liveblocksUserId: "lb_123",
+    agentId: "research-agent",
+  });
+});
+
 test("run token rejects tampered payload", () => {
   const token = signRunToken(
     { orgId: "org_123", runId: "run_123", exp: 2_000 },

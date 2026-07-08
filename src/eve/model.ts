@@ -4,7 +4,11 @@ import {
   type ClaudeCodeModelId,
   type ClaudeCodeSettings,
 } from "ai-sdk-provider-claude-code";
-import { impelGatewayClaudeModel } from "./gateway-model.js";
+import {
+  impelGatewayClaudeModel,
+  impelGatewayCodexModel,
+  resolveImpelGatewayUrl,
+} from "./gateway-model.js";
 import {
   impelInference,
   type ImpelInferenceHeaders,
@@ -36,6 +40,7 @@ export interface ImpelClaudeModelOptions
   defaultLocalModel?: ClaudeCodeModelId;
   allowLocalProviderFallback?: boolean;
   gatewayUrl?: string;
+  gatewayAuthToken?: string;
   gatewayPat?: string;
   headers?: ImpelInferenceHeaders;
   runContext?: ImpelInferenceRunContextProvider;
@@ -55,6 +60,7 @@ export interface ImpelCodexModelOptions
   modelId?: string;
   defaultModelId?: string;
   gatewayUrl?: string;
+  gatewayAuthToken?: string;
   gatewayPat?: string;
   headers?: ImpelInferenceHeaders;
   runContext?: ImpelInferenceRunContextProvider;
@@ -209,6 +215,7 @@ export function createImpelClaudeModel(
     cwd,
     allowLocalProviderFallback: explicitAllowLocalProviderFallback,
     gatewayUrl: explicitGatewayUrl,
+    gatewayAuthToken: explicitGatewayAuthToken,
     gatewayPat: explicitGatewayPat,
     provider = "claude-code",
     ...inferenceOptions
@@ -225,16 +232,22 @@ export function createImpelClaudeModel(
     cwd,
   });
 
-  const gatewayUrl = explicitGatewayUrl ?? process.env.IMPEL_GATEWAY_URL;
-  const gatewayPat = explicitGatewayPat ?? process.env.IMPEL_GATEWAY_PAT;
-  if (gatewayUrl && gatewayPat) {
+  const gatewayUrl = resolveImpelGatewayUrl(explicitGatewayUrl);
+  if (gatewayUrl) {
     return impelGatewayClaudeModel(modelId, {
       gatewayUrl,
-      pat: gatewayPat,
+      authToken:
+        explicitGatewayAuthToken ??
+        explicitGatewayPat ??
+        process.env.IMPEL_GATEWAY_AUTH_TOKEN ??
+        process.env.IMPEL_GATEWAY_PAT,
       providerOptions: resolvedProviderOptions as unknown as Record<
         string,
         unknown
       >,
+      localModel,
+      defaultLocalModel,
+      runContext: inferenceOptions.runContext,
     });
   }
 
@@ -269,10 +282,10 @@ export function createImpelClaudeModel(
   ) {
     throw new Error(
       "IMPEL_INFERENCE_URL is not set — this deployed agent cannot reach " +
-        "impel-inference, and the local claude-code provider only works in local " +
+        "impel-gateway or impel-inference, and the local claude-code provider only works in local " +
         "development (it requires the Claude Code CLI and Anthropic OAuth " +
         "credentials, which do not exist in a Vercel serverless runtime). Set " +
-        "IMPEL_INFERENCE_URL (and IMPEL_INFERENCE_API_KEY) on this deployment, or " +
+        "IMPEL_GATEWAY_URL on this deployment, or " +
         "set IMPEL_ALLOW_CLAUDE_CODE_FALLBACK=1 to force the local provider.",
     );
   }
@@ -283,7 +296,7 @@ export function createImpelClaudeModel(
   // force-disable the local provider via `allowLocalProviderFallback: false`.
   if (!allowLocalProviderFallback(explicitAllowLocalProviderFallback)) {
     throw new Error(
-      "IMPEL_INFERENCE_URL or baseUrl is required for createImpelClaudeModel in production. Set IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK=true only for explicit local development.",
+      "IMPEL_GATEWAY_URL, IMPEL_INFERENCE_URL, or baseUrl is required for createImpelClaudeModel in production. Set IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK=true only for explicit local development.",
     );
   }
 
@@ -304,8 +317,9 @@ export function createImpelCodexModel(
     sandboxMode,
     skipGitRepoCheck,
     effort,
-    gatewayUrl: _gatewayUrl,
-    gatewayPat: _gatewayPat,
+    gatewayUrl,
+    gatewayAuthToken,
+    gatewayPat,
     ...inferenceOptions
   } = options;
   const modelId = resolveImpelCodexModelId({
@@ -313,8 +327,26 @@ export function createImpelCodexModel(
     defaultModelId,
   });
 
-  // Codex gateway mode is not implemented yet; keep the existing
-  // impel-inference path while stripping gateway-only options from the request.
+  const resolvedGatewayUrl = resolveImpelGatewayUrl(gatewayUrl);
+  if (resolvedGatewayUrl) {
+    return impelGatewayCodexModel(modelId, {
+      gatewayUrl: resolvedGatewayUrl,
+      authToken:
+        gatewayAuthToken ??
+        gatewayPat ??
+        process.env.IMPEL_GATEWAY_AUTH_TOKEN ??
+        process.env.IMPEL_GATEWAY_PAT,
+      providerOptions: createImpelCodexProviderOptions({
+        providerOptions,
+        approvalMode,
+        sandboxMode,
+        skipGitRepoCheck,
+        effort,
+      }),
+      runContext: inferenceOptions.runContext,
+    });
+  }
+
   return impelInference(modelId, {
     ...inferenceOptions,
     provider: "codex-app-server",

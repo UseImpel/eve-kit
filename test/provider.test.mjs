@@ -1083,7 +1083,7 @@ test("createImpelClaudeModel requires impel-inference in production", () => {
   try {
     assert.throws(
       () => createImpelClaudeModel(),
-      /IMPEL_INFERENCE_URL or baseUrl is required/,
+      /IMPEL_GATEWAY_URL, IMPEL_INFERENCE_URL, or baseUrl is required/,
     );
     assert.doesNotThrow(() =>
       createImpelClaudeModel({ allowLocalProviderFallback: true }),

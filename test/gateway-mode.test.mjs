@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildGatewayClaudeCodeSettings } from "../dist/eve/gateway-model.js";
-import { createImpelClaudeModel } from "../dist/eve/model.js";
+import {
+  buildGatewayClaudeCodeSettings,
+  buildGatewayCodexAppServerSettings,
+} from "../dist/eve/gateway-model.js";
+import {
+  createImpelClaudeModel,
+  createImpelCodexModel,
+} from "../dist/eve/model.js";
 
 const ENV_KEYS = [
   "IMPEL_GATEWAY_URL",
+  "IMPEL_GATEWAY_AUTH_TOKEN",
   "IMPEL_GATEWAY_PAT",
   "IMPEL_INFERENCE_URL",
   "IMPEL_INFERENCE_API_KEY",
@@ -109,7 +116,7 @@ test("createImpelClaudeModel uses gateway env when configured", () => {
 
     const model = createImpelClaudeModel({ modelId: "sonnet" });
 
-    assert.equal(model.provider, "claude-code");
+    assert.equal(model.provider, "impel-gateway");
     assert.equal(
       model.settings.env.ANTHROPIC_BASE_URL,
       "https://gateway.example/anthropic",
@@ -119,6 +126,60 @@ test("createImpelClaudeModel uses gateway env when configured", () => {
       model.settings.env.CLAUDE_CONFIG_DIR,
       /^\/tmp\/impel-gateway-claude\//,
     );
+  } finally {
+    restoreEnv();
+  }
+});
+
+test("builds Codex app-server settings for impel-gateway", () => {
+  const settings = buildGatewayCodexAppServerSettings({
+    gatewayUrl: "https://gateway.useimpel.com/",
+    authToken: "impel_pat_test",
+    orgId: "org_123",
+    runId: "run_123",
+    codexHomeRoot: "/tmp/impel-codex-test",
+    providerOptions: {
+      env: {
+        KEEP_ME: "1",
+        DROP_ME: 1,
+      },
+      "codex-app-server": {
+        approvalPolicy: "never",
+        sandboxPolicy: "workspace-write",
+        effort: "high",
+      },
+    },
+  });
+
+  assert.equal(settings.env.CODEX_HOME, "/tmp/impel-codex-test/org_123/run_123");
+  assert.equal(settings.env.IMPEL_GATEWAY_AUTH_TOKEN, "impel_pat_test");
+  assert.equal(settings.env.KEEP_ME, "1");
+  assert.equal("DROP_ME" in settings.env, false);
+  assert.equal(settings.approvalPolicy, "never");
+  assert.equal(settings.sandboxPolicy, "workspace-write");
+  assert.equal(settings.effort, "high");
+  assert.equal(settings.configOverrides.model_provider, "impel");
+  assert.equal(
+    settings.configOverrides.model_providers.impel.base_url,
+    "https://gateway.useimpel.com/chatgpt_passthrough/backend-api/codex",
+  );
+  assert.equal(
+    settings.configOverrides.model_providers.impel.auth.args[1],
+    "process.stdout.write((process.env.IMPEL_GATEWAY_AUTH_TOKEN || '') + '\\n')",
+  );
+});
+
+test("createImpelCodexModel uses gateway env when configured", () => {
+  const restoreEnv = restoreEnvSnapshot();
+  try {
+    process.env.IMPEL_GATEWAY_URL = "https://gateway.example/";
+    process.env.IMPEL_GATEWAY_AUTH_TOKEN = "impel_pat_env";
+    delete process.env.IMPEL_INFERENCE_URL;
+    delete process.env.IMPEL_INFERENCE_API_KEY;
+
+    const model = createImpelCodexModel({ modelId: "gpt-5.5" });
+
+    assert.equal(model.provider, "impel-gateway");
   } finally {
     restoreEnv();
   }
