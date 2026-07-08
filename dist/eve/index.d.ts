@@ -1,4 +1,5 @@
 export * from "./model.js";
+export * from "./gateway-model.js";
 export * from "./channel.js";
 export * from "./workspace-tools.js";
 export * from "./gateway.js";

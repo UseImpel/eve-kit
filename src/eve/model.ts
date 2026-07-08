@@ -4,6 +4,7 @@ import {
   type ClaudeCodeModelId,
   type ClaudeCodeSettings,
 } from "ai-sdk-provider-claude-code";
+import { impelGatewayClaudeModel } from "./gateway-model.js";
 import {
   impelInference,
   type ImpelInferenceHeaders,
@@ -34,6 +35,8 @@ export interface ImpelClaudeModelOptions
   localModel?: ClaudeCodeModelId;
   defaultLocalModel?: ClaudeCodeModelId;
   allowLocalProviderFallback?: boolean;
+  gatewayUrl?: string;
+  gatewayPat?: string;
   headers?: ImpelInferenceHeaders;
   runContext?: ImpelInferenceRunContextProvider;
 }
@@ -51,6 +54,8 @@ export interface ImpelCodexModelOptions
     ImpelCodexProviderOptionsInput {
   modelId?: string;
   defaultModelId?: string;
+  gatewayUrl?: string;
+  gatewayPat?: string;
   headers?: ImpelInferenceHeaders;
   runContext?: ImpelInferenceRunContextProvider;
 }
@@ -203,6 +208,8 @@ export function createImpelClaudeModel(
     effort,
     cwd,
     allowLocalProviderFallback: explicitAllowLocalProviderFallback,
+    gatewayUrl: explicitGatewayUrl,
+    gatewayPat: explicitGatewayPat,
     provider = "claude-code",
     ...inferenceOptions
   } = options;
@@ -217,6 +224,19 @@ export function createImpelClaudeModel(
     effort,
     cwd,
   });
+
+  const gatewayUrl = explicitGatewayUrl ?? process.env.IMPEL_GATEWAY_URL;
+  const gatewayPat = explicitGatewayPat ?? process.env.IMPEL_GATEWAY_PAT;
+  if (gatewayUrl && gatewayPat) {
+    return impelGatewayClaudeModel(modelId, {
+      gatewayUrl,
+      pat: gatewayPat,
+      providerOptions: resolvedProviderOptions as unknown as Record<
+        string,
+        unknown
+      >,
+    });
+  }
 
   if (inferenceOptions.baseUrl ?? process.env.IMPEL_INFERENCE_URL) {
     return impelInference(modelId, {
@@ -284,6 +304,8 @@ export function createImpelCodexModel(
     sandboxMode,
     skipGitRepoCheck,
     effort,
+    gatewayUrl: _gatewayUrl,
+    gatewayPat: _gatewayPat,
     ...inferenceOptions
   } = options;
   const modelId = resolveImpelCodexModelId({
@@ -291,6 +313,8 @@ export function createImpelCodexModel(
     defaultModelId,
   });
 
+  // Codex gateway mode is not implemented yet; keep the existing
+  // impel-inference path while stripping gateway-only options from the request.
   return impelInference(modelId, {
     ...inferenceOptions,
     provider: "codex-app-server",
