@@ -1,4 +1,4 @@
-import type { LanguageModelV3 } from "@ai-sdk/provider";
+import type { LanguageModel } from "ai";
 import { type ClaudeCodeModelId, type ClaudeCodeSettings } from "ai-sdk-provider-claude-code";
 import { type ImpelInferenceHeaders, type ImpelInferenceOptions, type ImpelInferenceRunContextProvider } from "../index.js";
 export declare const IMPEL_CLAUDE_CONTEXT_WINDOW_TOKENS = 200000;
@@ -60,7 +60,7 @@ export declare function resolveImpelOpenAIResponsesModelId({ modelId, defaultMod
     defaultModelId?: string;
 }): string;
 export declare function inferClaudeCodeLocalModel(modelId: string, fallback?: ClaudeCodeModelId): ClaudeCodeModelId;
-export declare function createImpelClaudeModel(options?: ImpelClaudeModelOptions): LanguageModelV3;
-export declare function createImpelCodexModel(options?: ImpelCodexModelOptions): LanguageModelV3;
-export declare function createImpelOpenAIResponsesModel(options?: ImpelOpenAIResponsesModelOptions): LanguageModelV3;
+export declare function createImpelClaudeModel(options?: ImpelClaudeModelOptions): LanguageModel;
+export declare function createImpelCodexModel(options?: ImpelCodexModelOptions): LanguageModel;
+export declare function createImpelOpenAIResponsesModel(options?: ImpelOpenAIResponsesModelOptions): LanguageModel;
 //# sourceMappingURL=model.d.ts.map

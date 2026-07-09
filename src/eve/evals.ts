@@ -66,8 +66,7 @@ export function createImpelSmokeEval({
     metadata,
     async test(t) {
       await t.send(message);
-      t.didNotFail();
-      t.completed();
+      t.succeeded();
     },
   });
 }

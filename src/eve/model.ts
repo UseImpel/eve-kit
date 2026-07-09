@@ -1,4 +1,4 @@
-import type { LanguageModelV3 } from "@ai-sdk/provider";
+import type { LanguageModel } from "ai";
 import {
   claudeCode,
   type ClaudeCodeModelId,
@@ -201,7 +201,7 @@ function allowLocalProviderFallback(explicit?: boolean): boolean {
 
 export function createImpelClaudeModel(
   options: ImpelClaudeModelOptions = {},
-): LanguageModelV3 {
+): LanguageModel {
   const {
     modelId: explicitModelId,
     defaultModelId,
@@ -308,7 +308,7 @@ export function createImpelClaudeModel(
 
 export function createImpelCodexModel(
   options: ImpelCodexModelOptions = {},
-): LanguageModelV3 {
+): LanguageModel {
   const {
     modelId: explicitModelId,
     defaultModelId,
@@ -362,7 +362,7 @@ export function createImpelCodexModel(
 
 export function createImpelOpenAIResponsesModel(
   options: ImpelOpenAIResponsesModelOptions = {},
-): LanguageModelV3 {
+): LanguageModel {
   return createImpelCodexModel({
     ...options,
     defaultModelId:

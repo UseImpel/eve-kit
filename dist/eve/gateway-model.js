@@ -1,10 +1,8 @@
-import { mkdirSync } from "node:fs";
 import { mkdir as mkdirAsync } from "node:fs/promises";
 import { join } from "node:path";
-import { claudeCode, } from "ai-sdk-provider-claude-code";
+import { createAnthropic, } from "@ai-sdk/anthropic";
 import { createCodexAppServer, } from "ai-sdk-provider-codex-cli";
 const CLIENT_CONTEXT_SENTINEL = "Client context:\n";
-const DEFAULT_CLAUDE_CONFIG_ROOT = "/tmp/impel-gateway-claude";
 const DEFAULT_CODEX_HOME_ROOT = "/tmp/impel-gateway-codex";
 const RUN_TOKEN_PLACEHOLDER = "<impel-run-token>";
 export function resolveImpelGatewayUrl(explicit) {
@@ -12,51 +10,39 @@ export function resolveImpelGatewayUrl(explicit) {
     return value?.trim() ? withoutTrailingSlash(value) : undefined;
 }
 /**
- * Runs Claude Code against impel-gateway's Anthropic-compatible endpoint.
- *
- * Hosted Eve agents should pass a signed run token in clientContext. Static PAT
- * auth is still accepted for local/dev callers, but the per-run token wins so
- * gateway usage can be attributed to the invoking run/user/agent.
+ * Runs Anthropic Messages traffic through impel-gateway while keeping the normal
+ * AI SDK/Eve tool loop intact. Hosted Eve agents should pass a signed run token
+ * in clientContext. Static PAT auth is still accepted for local/dev callers, but
+ * the per-run token wins so gateway usage can be attributed to the invoking
+ * run/user/agent.
  */
 export function impelGatewayClaudeModel(modelId, opts) {
     const gatewayUrl = requireGatewayUrl(opts.gatewayUrl);
-    const localModel = opts.localModel ?? inferClaudeCodeLocalModel(modelId, opts.defaultLocalModel);
-    const providerOptions = opts.providerOptions ?? {};
-    const probeConfigDir = opts.configDir ??
-        join(process.env.IMPEL_CLAUDE_CODE_CONFIG_ROOT ?? DEFAULT_CLAUDE_CONFIG_ROOT, "probe");
-    mkdirSync(probeConfigDir, { recursive: true, mode: 0o700 });
-    const probe = claudeCode(localModel, buildGatewayClaudeCodeSettings({
-        providerOptions,
+    const callConfig = buildGatewayAnthropicCallConfig(opts.providerOptions);
+    const probe = createGatewayAnthropicModel({
+        authToken: opts.authToken ?? opts.pat ?? "impel-gateway-auth-token",
         gatewayUrl,
-        pat: opts.authToken ?? opts.pat ?? "impel-gateway-auth-token",
-        configDir: probeConfigDir,
-    }));
+        modelId,
+    });
     const buildInner = async (options) => {
         const invocation = await resolveGatewayInvocation(options, {
             gatewayUrl,
             gatewayAuthToken: opts.authToken ?? opts.pat,
             runContext: opts.runContext,
         });
-        const configDir = opts.configDir ??
-            join(process.env.IMPEL_CLAUDE_CODE_CONFIG_ROOT ?? DEFAULT_CLAUDE_CONFIG_ROOT, safeSegment(invocation.orgId, "org"), safeSegment(invocation.runId, "run"));
-        await mkdirAsync(configDir, { recursive: true, mode: 0o700 });
-        const inner = claudeCode(localModel, buildGatewayClaudeCodeSettings({
-            providerOptions,
+        const inner = createGatewayAnthropicModel({
+            authToken: invocation.authToken,
             gatewayUrl: invocation.gatewayUrl,
-            pat: invocation.authToken,
-            configDir,
-        }));
+            modelId,
+        });
         return {
             inner,
-            options: {
-                ...options,
-                prompt: scrubPromptRunToken(options.prompt, invocation.runToken),
-            },
+            options: withGatewayAnthropicCallOptions(options, callConfig, invocation.runToken),
         };
     };
     return {
         ...probe,
-        provider: "impel-gateway",
+        provider: "anthropic.impel-gateway",
         async doGenerate(options) {
             const { inner, options: nextOptions } = await buildInner(options);
             return inner.doGenerate(nextOptions);
@@ -66,6 +52,12 @@ export function impelGatewayClaudeModel(modelId, opts) {
             return inner.doStream(nextOptions);
         },
     };
+}
+function createGatewayAnthropicModel(args) {
+    return createAnthropic(buildGatewayAnthropicProviderSettings({
+        gatewayUrl: args.gatewayUrl,
+        authToken: args.authToken,
+    }))(args.modelId);
 }
 export function impelGatewayCodexModel(modelId, opts) {
     const gatewayUrl = requireGatewayUrl(opts.gatewayUrl);
@@ -178,6 +170,49 @@ export function buildGatewayClaudeCodeSettings(args) {
             DISABLE_LOGOUT_COMMAND: "1",
         },
     });
+}
+export function buildGatewayAnthropicProviderSettings(args) {
+    return pruneUndefined({
+        baseURL: `${withoutTrailingSlash(args.gatewayUrl)}/anthropic/v1`,
+        authToken: args.authToken,
+        headers: args.headers,
+        name: "anthropic.impel-gateway",
+    });
+}
+export function buildGatewayAnthropicCallConfig(providerOptions) {
+    const source = providerOptions ?? {};
+    const scoped = mergeScopedProviderOptions(source, [
+        "anthropic",
+        "claude",
+        "claude_code",
+        "claude-code",
+    ]);
+    const merged = { ...source, ...scoped };
+    const anthropicOptions = pruneUndefined({
+        sendReasoning: booleanValue(merged.sendReasoning),
+        structuredOutputMode: stringValue(merged.structuredOutputMode),
+        thinking: plainObjectValue(merged.thinking),
+        disableParallelToolUse: booleanValue(merged.disableParallelToolUse),
+        cacheControl: plainObjectValue(merged.cacheControl),
+        metadata: plainObjectValue(merged.metadata),
+        mcpServers: arrayValue(merged.mcpServers),
+        container: plainObjectValue(merged.container),
+        toolStreaming: booleanValue(merged.toolStreaming),
+        effort: stringValue(merged.effort),
+        taskBudget: plainObjectValue(merged.taskBudget),
+        speed: stringValue(merged.speed),
+        inferenceGeo: stringValue(merged.inferenceGeo),
+        fallbacks: arrayValue(merged.fallbacks),
+        anthropicBeta: stringArrayValue(merged.anthropicBeta),
+        contextManagement: plainObjectValue(merged.contextManagement),
+    });
+    return Object.keys(anthropicOptions).length
+        ? {
+            providerOptions: {
+                anthropic: anthropicOptions,
+            },
+        }
+        : {};
 }
 export function buildGatewayCodexAppServerSettings(args) {
     return createCodexGatewaySettings({
@@ -328,6 +363,13 @@ async function resolveGatewayInvocation(options, args) {
             fallbackContext.runId,
     };
 }
+function withGatewayAnthropicCallOptions(options, callConfig, runToken) {
+    return {
+        ...options,
+        prompt: scrubPromptRunToken(options.prompt, runToken),
+        providerOptions: mergeProviderOptions(options.providerOptions, callConfig.providerOptions),
+    };
+}
 function scrubPromptRunToken(prompt, runToken) {
     if (!runToken)
         return prompt;
@@ -450,6 +492,23 @@ function isPlainObject(value) {
 }
 function plainObjectValue(value) {
     return isPlainObject(value) ? value : undefined;
+}
+function arrayValue(value) {
+    return Array.isArray(value) ? value : undefined;
+}
+function mergeProviderOptions(base, injected) {
+    if (!injected || !Object.keys(injected).length)
+        return base;
+    if (!base || !Object.keys(base).length)
+        return injected;
+    const merged = { ...base };
+    for (const [namespace, value] of Object.entries(injected)) {
+        merged[namespace] = {
+            ...(plainObjectValue(base[namespace]) ?? {}),
+            ...value,
+        };
+    }
+    return merged;
 }
 function stringRecordValue(value) {
     if (!isPlainObject(value))
