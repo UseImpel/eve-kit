@@ -263,6 +263,52 @@ function safeJsonObject(raw) {
         return undefined;
     }
 }
+function findJsonObjectEnd(text) {
+    let depth = 0;
+    let escaped = false;
+    let inString = false;
+    for (let index = 0; index < text.length; index += 1) {
+        const char = text[index];
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+            }
+            else if (char === "\\") {
+                escaped = true;
+            }
+            else if (char === '"') {
+                inString = false;
+            }
+            continue;
+        }
+        if (char === '"') {
+            inString = true;
+        }
+        else if (char === "{") {
+            depth += 1;
+        }
+        else if (char === "}") {
+            depth -= 1;
+            if (depth === 0)
+                return index;
+            if (depth < 0)
+                return undefined;
+        }
+    }
+    return undefined;
+}
+function extractClientContextObject(raw) {
+    const text = raw.replace(/^\s+/, "");
+    if (!text.startsWith(CLIENT_CONTEXT_SENTINEL))
+        return undefined;
+    const tail = text.slice(CLIENT_CONTEXT_SENTINEL.length).replace(/^\s+/, "");
+    if (!tail.startsWith("{"))
+        return safeJsonObject(tail);
+    const end = findJsonObjectEnd(tail);
+    if (end === undefined)
+        return safeJsonObject(tail);
+    return safeJsonObject(tail.slice(0, end + 1));
+}
 function normalizePromptRunContext(obj) {
     const orgId = stringValue(obj.orgId);
     const repos = Array.isArray(obj.repos) && obj.repos.every((item) => typeof item === "string")
@@ -307,10 +353,7 @@ function extractRunContextFromPrompt(prompt) {
         if (msg.role !== "user" && msg.role !== "system")
             continue;
         const raw = messageContentToText(msg.content);
-        const text = raw.replace(/^\s+/, "");
-        if (!text.startsWith(CLIENT_CONTEXT_SENTINEL))
-            continue;
-        const parsed = safeJsonObject(text.slice(CLIENT_CONTEXT_SENTINEL.length));
+        const parsed = extractClientContextObject(raw);
         return parsed ? normalizePromptRunContext(parsed) : null;
     }
     return null;
