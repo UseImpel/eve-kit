@@ -4,6 +4,7 @@ import { createAnthropic, } from "@ai-sdk/anthropic";
 import { createCodexAppServer, } from "ai-sdk-provider-codex-cli";
 const CLIENT_CONTEXT_SENTINEL = "Client context:\n";
 const DEFAULT_CODEX_HOME_ROOT = "/tmp/impel-gateway-codex";
+const GATEWAY_ANTHROPIC_USER_AGENT = "claude-code/impel-eve";
 const RUN_TOKEN_PLACEHOLDER = "<impel-run-token>";
 export function resolveImpelGatewayUrl(explicit) {
     const value = explicit ?? process.env.IMPEL_GATEWAY_URL ?? process.env.IMPEL_GATEWAY_BASE_URL;
@@ -40,18 +41,26 @@ export function impelGatewayClaudeModel(modelId, opts) {
             options: withGatewayAnthropicCallOptions(options, callConfig, invocation.runToken),
         };
     };
-    return {
-        ...probe,
-        provider: "anthropic.impel-gateway",
-        async doGenerate(options) {
-            const { inner, options: nextOptions } = await buildInner(options);
-            return inner.doGenerate(nextOptions);
-        },
-        async doStream(options) {
-            const { inner, options: nextOptions } = await buildInner(options);
-            return inner.doStream(nextOptions);
-        },
+    const doGenerate = async (options) => {
+        const { inner, options: nextOptions } = await buildInner(options);
+        return inner.doGenerate(nextOptions);
     };
+    const doStream = async (options) => {
+        const { inner, options: nextOptions } = await buildInner(options);
+        return inner.doStream(nextOptions);
+    };
+    return new Proxy(probe, {
+        get(target, prop, receiver) {
+            if (prop === "provider")
+                return "anthropic.impel-gateway";
+            if (prop === "doGenerate")
+                return doGenerate;
+            if (prop === "doStream")
+                return doStream;
+            const value = Reflect.get(target, prop, receiver);
+            return typeof value === "function" ? value.bind(target) : value;
+        },
+    });
 }
 function createGatewayAnthropicModel(args) {
     return createAnthropic(buildGatewayAnthropicProviderSettings({
@@ -172,10 +181,14 @@ export function buildGatewayClaudeCodeSettings(args) {
     });
 }
 export function buildGatewayAnthropicProviderSettings(args) {
+    const headers = {
+        "user-agent": GATEWAY_ANTHROPIC_USER_AGENT,
+        ...(args.headers ?? {}),
+    };
     return pruneUndefined({
         baseURL: `${withoutTrailingSlash(args.gatewayUrl)}/anthropic/v1`,
         authToken: args.authToken,
-        headers: args.headers,
+        headers,
         name: "anthropic.impel-gateway",
     });
 }
