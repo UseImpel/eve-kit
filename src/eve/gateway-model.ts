@@ -1,9 +1,18 @@
-import { mkdirSync } from "node:fs";
 import { mkdir as mkdirAsync } from "node:fs/promises";
 import { join } from "node:path";
-import type { LanguageModelV3, LanguageModelV3CallOptions } from "@ai-sdk/provider";
 import {
-  claudeCode,
+  createAnthropic,
+  type AnthropicLanguageModelOptions,
+  type AnthropicProviderSettings,
+} from "@ai-sdk/anthropic";
+import type {
+  LanguageModelV3,
+  LanguageModelV3CallOptions,
+  LanguageModelV4,
+  LanguageModelV4CallOptions,
+} from "@ai-sdk/provider";
+import type { LanguageModel } from "ai";
+import {
   type ClaudeCodeModelId,
   type ClaudeCodeSettings,
 } from "ai-sdk-provider-claude-code";
@@ -18,9 +27,17 @@ import type {
 } from "../index.js";
 
 type JsonObject = Record<string, unknown>;
+type GatewayPromptMessage = { role: string; content: unknown };
+type GatewayPrompt = readonly GatewayPromptMessage[];
+type GatewayCallOptions = {
+  prompt: GatewayPrompt;
+};
+type GatewayAnthropicProviderOptions = Partial<AnthropicLanguageModelOptions>;
+type GatewayAnthropicCallConfig = {
+  providerOptions?: LanguageModelV4CallOptions["providerOptions"];
+};
 
 const CLIENT_CONTEXT_SENTINEL = "Client context:\n";
-const DEFAULT_CLAUDE_CONFIG_ROOT = "/tmp/impel-gateway-claude";
 const DEFAULT_CODEX_HOME_ROOT = "/tmp/impel-gateway-codex";
 const RUN_TOKEN_PLACEHOLDER = "<impel-run-token>";
 
@@ -62,81 +79,70 @@ export function resolveImpelGatewayUrl(explicit?: string): string | undefined {
 }
 
 /**
- * Runs Claude Code against impel-gateway's Anthropic-compatible endpoint.
- *
- * Hosted Eve agents should pass a signed run token in clientContext. Static PAT
- * auth is still accepted for local/dev callers, but the per-run token wins so
- * gateway usage can be attributed to the invoking run/user/agent.
+ * Runs Anthropic Messages traffic through impel-gateway while keeping the normal
+ * AI SDK/Eve tool loop intact. Hosted Eve agents should pass a signed run token
+ * in clientContext. Static PAT auth is still accepted for local/dev callers, but
+ * the per-run token wins so gateway usage can be attributed to the invoking
+ * run/user/agent.
  */
 export function impelGatewayClaudeModel(
   modelId: string,
   opts: ImpelGatewayClaudeModelOptions,
-): LanguageModelV3 {
+): LanguageModel {
   const gatewayUrl = requireGatewayUrl(opts.gatewayUrl);
-  const localModel =
-    opts.localModel ?? inferClaudeCodeLocalModel(modelId, opts.defaultLocalModel);
-  const providerOptions = opts.providerOptions ?? {};
-  const probeConfigDir =
-    opts.configDir ??
-    join(
-      process.env.IMPEL_CLAUDE_CODE_CONFIG_ROOT ?? DEFAULT_CLAUDE_CONFIG_ROOT,
-      "probe",
-    );
-  mkdirSync(probeConfigDir, { recursive: true, mode: 0o700 });
-  const probe = claudeCode(
-    localModel,
-    buildGatewayClaudeCodeSettings({
-      providerOptions,
-      gatewayUrl,
-      pat: opts.authToken ?? opts.pat ?? "impel-gateway-auth-token",
-      configDir: probeConfigDir,
-    }),
-  ) as LanguageModelV3 & Record<string, unknown>;
+  const callConfig = buildGatewayAnthropicCallConfig(opts.providerOptions);
+  const probe = createGatewayAnthropicModel({
+    authToken: opts.authToken ?? opts.pat ?? "impel-gateway-auth-token",
+    gatewayUrl,
+    modelId,
+  }) as LanguageModelV4 & Record<string, unknown>;
 
-  const buildInner = async (options: LanguageModelV3CallOptions) => {
+  const buildInner = async (options: LanguageModelV4CallOptions) => {
     const invocation = await resolveGatewayInvocation(options, {
       gatewayUrl,
       gatewayAuthToken: opts.authToken ?? opts.pat,
       runContext: opts.runContext,
     });
-    const configDir =
-      opts.configDir ??
-      join(
-        process.env.IMPEL_CLAUDE_CODE_CONFIG_ROOT ?? DEFAULT_CLAUDE_CONFIG_ROOT,
-        safeSegment(invocation.orgId, "org"),
-        safeSegment(invocation.runId, "run"),
-      );
-    await mkdirAsync(configDir, { recursive: true, mode: 0o700 });
-    const inner = claudeCode(
-      localModel,
-      buildGatewayClaudeCodeSettings({
-        providerOptions,
-        gatewayUrl: invocation.gatewayUrl,
-        pat: invocation.authToken,
-        configDir,
-      }),
-    );
+    const inner = createGatewayAnthropicModel({
+      authToken: invocation.authToken,
+      gatewayUrl: invocation.gatewayUrl,
+      modelId,
+    });
     return {
       inner,
-      options: {
-        ...options,
-        prompt: scrubPromptRunToken(options.prompt, invocation.runToken),
-      },
+      options: withGatewayAnthropicCallOptions(
+        options,
+        callConfig,
+        invocation.runToken,
+      ),
     };
   };
 
   return {
     ...probe,
-    provider: "impel-gateway",
-    async doGenerate(options) {
+    provider: "anthropic.impel-gateway",
+    async doGenerate(options: LanguageModelV4CallOptions) {
       const { inner, options: nextOptions } = await buildInner(options);
       return inner.doGenerate(nextOptions);
     },
-    async doStream(options) {
+    async doStream(options: LanguageModelV4CallOptions) {
       const { inner, options: nextOptions } = await buildInner(options);
       return inner.doStream(nextOptions);
     },
-  } as LanguageModelV3;
+  } as LanguageModelV4;
+}
+
+function createGatewayAnthropicModel(args: {
+  gatewayUrl: string;
+  authToken: string;
+  modelId: string;
+}): LanguageModelV4 {
+  return createAnthropic(
+    buildGatewayAnthropicProviderSettings({
+      gatewayUrl: args.gatewayUrl,
+      authToken: args.authToken,
+    }),
+  )(args.modelId) as LanguageModelV4;
 }
 
 export function impelGatewayCodexModel(
@@ -269,6 +275,84 @@ export function buildGatewayClaudeCodeSettings(args: {
   }) as ClaudeCodeSettings;
 }
 
+export function buildGatewayAnthropicProviderSettings(args: {
+  gatewayUrl: string;
+  authToken: string;
+  headers?: Record<string, string>;
+}): AnthropicProviderSettings {
+  return pruneUndefined({
+    baseURL: `${withoutTrailingSlash(args.gatewayUrl)}/anthropic/v1`,
+    authToken: args.authToken,
+    headers: args.headers,
+    name: "anthropic.impel-gateway",
+  }) as AnthropicProviderSettings;
+}
+
+export function buildGatewayAnthropicCallConfig(
+  providerOptions?: JsonObject,
+): GatewayAnthropicCallConfig {
+  const source = providerOptions ?? {};
+  const scoped = mergeScopedProviderOptions(source, [
+    "anthropic",
+    "claude",
+    "claude_code",
+    "claude-code",
+  ]);
+  const merged = { ...source, ...scoped };
+  const anthropicOptions = pruneUndefined({
+    sendReasoning: booleanValue(merged.sendReasoning),
+    structuredOutputMode: stringValue(merged.structuredOutputMode) as
+      | GatewayAnthropicProviderOptions["structuredOutputMode"]
+      | undefined,
+    thinking: plainObjectValue(merged.thinking) as
+      | GatewayAnthropicProviderOptions["thinking"]
+      | undefined,
+    disableParallelToolUse: booleanValue(merged.disableParallelToolUse),
+    cacheControl: plainObjectValue(merged.cacheControl) as
+      | GatewayAnthropicProviderOptions["cacheControl"]
+      | undefined,
+    metadata: plainObjectValue(merged.metadata) as
+      | GatewayAnthropicProviderOptions["metadata"]
+      | undefined,
+    mcpServers: arrayValue(merged.mcpServers) as
+      | GatewayAnthropicProviderOptions["mcpServers"]
+      | undefined,
+    container: plainObjectValue(merged.container) as
+      | GatewayAnthropicProviderOptions["container"]
+      | undefined,
+    toolStreaming: booleanValue(merged.toolStreaming),
+    effort: stringValue(merged.effort) as
+      | GatewayAnthropicProviderOptions["effort"]
+      | undefined,
+    taskBudget: plainObjectValue(merged.taskBudget) as
+      | GatewayAnthropicProviderOptions["taskBudget"]
+      | undefined,
+    speed: stringValue(merged.speed) as
+      | GatewayAnthropicProviderOptions["speed"]
+      | undefined,
+    inferenceGeo: stringValue(merged.inferenceGeo) as
+      | GatewayAnthropicProviderOptions["inferenceGeo"]
+      | undefined,
+    fallbacks: arrayValue(merged.fallbacks) as
+      | GatewayAnthropicProviderOptions["fallbacks"]
+      | undefined,
+    anthropicBeta: stringArrayValue(merged.anthropicBeta) as
+      | GatewayAnthropicProviderOptions["anthropicBeta"]
+      | undefined,
+    contextManagement: plainObjectValue(merged.contextManagement) as
+      | GatewayAnthropicProviderOptions["contextManagement"]
+      | undefined,
+  }) as JsonObject;
+
+  return Object.keys(anthropicOptions).length
+    ? {
+        providerOptions: {
+          anthropic: anthropicOptions,
+        } as LanguageModelV4CallOptions["providerOptions"],
+      }
+    : {};
+}
+
 export function buildGatewayCodexAppServerSettings(args: {
   providerOptions?: JsonObject;
   gatewayUrl: string;
@@ -378,7 +462,7 @@ function normalizePromptRunContext(
 }
 
 function extractRunContextFromPrompt(
-  prompt: LanguageModelV3CallOptions["prompt"],
+  prompt: GatewayPrompt,
 ): ImpelInferenceRunContext | null {
   for (const msg of prompt) {
     if (msg.role !== "user" && msg.role !== "system") continue;
@@ -414,7 +498,7 @@ function envRunContext(): ImpelInferenceRunContext {
 }
 
 async function resolveGatewayInvocation(
-  options: LanguageModelV3CallOptions,
+  options: GatewayCallOptions,
   args: {
     gatewayUrl?: string;
     gatewayAuthToken?: string;
@@ -457,10 +541,25 @@ async function resolveGatewayInvocation(
   };
 }
 
-function scrubPromptRunToken(
-  prompt: LanguageModelV3CallOptions["prompt"],
+function withGatewayAnthropicCallOptions(
+  options: LanguageModelV4CallOptions,
+  callConfig: GatewayAnthropicCallConfig,
   runToken: string | undefined,
-): LanguageModelV3CallOptions["prompt"] {
+): LanguageModelV4CallOptions {
+  return {
+    ...options,
+    prompt: scrubPromptRunToken(options.prompt, runToken),
+    providerOptions: mergeProviderOptions(
+      options.providerOptions,
+      callConfig.providerOptions,
+    ),
+  };
+}
+
+function scrubPromptRunToken<TPrompt extends GatewayPrompt>(
+  prompt: TPrompt,
+  runToken: string | undefined,
+): TPrompt {
   if (!runToken) return prompt;
   return prompt.map((message) => {
     if (typeof message.content === "string") {
@@ -480,7 +579,7 @@ function scrubPromptRunToken(
       };
     }
     return message;
-  }) as LanguageModelV3CallOptions["prompt"];
+  }) as unknown as TPrompt;
 }
 
 function scrubRunToken(text: string, runToken: string): string {
@@ -625,6 +724,26 @@ function isPlainObject(value: unknown): value is JsonObject {
 
 function plainObjectValue(value: unknown): JsonObject | undefined {
   return isPlainObject(value) ? value : undefined;
+}
+
+function arrayValue(value: unknown): unknown[] | undefined {
+  return Array.isArray(value) ? value : undefined;
+}
+
+function mergeProviderOptions(
+  base: LanguageModelV4CallOptions["providerOptions"] | undefined,
+  injected: LanguageModelV4CallOptions["providerOptions"] | undefined,
+): LanguageModelV4CallOptions["providerOptions"] | undefined {
+  if (!injected || !Object.keys(injected).length) return base;
+  if (!base || !Object.keys(base).length) return injected;
+  const merged: Record<string, JsonObject> = { ...(base as Record<string, JsonObject>) };
+  for (const [namespace, value] of Object.entries(injected)) {
+    merged[namespace] = {
+      ...(plainObjectValue(base[namespace]) ?? {}),
+      ...(value as JsonObject),
+    };
+  }
+  return merged as LanguageModelV4CallOptions["providerOptions"];
 }
 
 function stringRecordValue(value: unknown): Record<string, string> | undefined {

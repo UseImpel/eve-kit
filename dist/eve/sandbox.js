@@ -10,7 +10,7 @@ export function impelJustBashSandbox() {
         },
     });
 }
-export function impelDefaultSandbox({ backend = { vercel: { runtime: "node24", resources: { vcpus: 2 } } }, installWorkspaceTools = true, } = {}) {
+export function impelDefaultSandbox({ backend = { vercel: { resources: { vcpus: 2 } } }, installWorkspaceTools = true, } = {}) {
     return defineSandbox({
         backend: defaultBackend(backend),
         revalidationKey: () => [

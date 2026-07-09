@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildGatewayAnthropicProviderSettings,
   buildGatewayClaudeCodeSettings,
   buildGatewayCodexAppServerSettings,
 } from "../dist/eve/gateway-model.js";
@@ -106,6 +107,19 @@ test("builds Claude Code settings for impel-gateway", () => {
   assert.deepEqual(settings.settingSources, []);
 });
 
+test("builds Anthropic provider settings for impel-gateway", () => {
+  const settings = buildGatewayAnthropicProviderSettings({
+    gatewayUrl: "https://gateway.useimpel.com/",
+    authToken: "impel_pat_test",
+    headers: { "x-test": "1" },
+  });
+
+  assert.equal(settings.baseURL, "https://gateway.useimpel.com/anthropic/v1");
+  assert.equal(settings.authToken, "impel_pat_test");
+  assert.deepEqual(settings.headers, { "x-test": "1" });
+  assert.equal(settings.name, "anthropic.impel-gateway");
+});
+
 test("createImpelClaudeModel uses gateway env when configured", () => {
   const restoreEnv = restoreEnvSnapshot();
   try {
@@ -116,17 +130,75 @@ test("createImpelClaudeModel uses gateway env when configured", () => {
 
     const model = createImpelClaudeModel({ modelId: "sonnet" });
 
-    assert.equal(model.provider, "impel-gateway");
-    assert.equal(
-      model.settings.env.ANTHROPIC_BASE_URL,
-      "https://gateway.example/anthropic",
-    );
-    assert.equal(model.settings.env.ANTHROPIC_AUTH_TOKEN, "impel_pat_env");
-    assert.match(
-      model.settings.env.CLAUDE_CONFIG_DIR,
-      /^\/tmp\/impel-gateway-claude\//,
-    );
+    assert.equal(model.provider, "anthropic.impel-gateway");
+    assert.equal(model.modelId, "sonnet");
+    assert.equal(model.specificationVersion, "v4");
   } finally {
+    restoreEnv();
+  }
+});
+
+test("gateway Claude model forwards AI SDK tools to Anthropic Messages", async () => {
+  const restoreEnv = restoreEnvSnapshot();
+  const previousFetch = globalThis.fetch;
+  const requests = [];
+
+  try {
+    process.env.IMPEL_GATEWAY_URL = "https://gateway.example/";
+    process.env.IMPEL_GATEWAY_PAT = "impel_pat_env";
+    delete process.env.IMPEL_INFERENCE_URL;
+    delete process.env.IMPEL_INFERENCE_API_KEY;
+
+    globalThis.fetch = async (url, init = {}) => {
+      requests.push({ url: String(url), init });
+      return new Response(
+        JSON.stringify({
+          id: "msg_test",
+          type: "message",
+          role: "assistant",
+          model: "claude-opus-4-8",
+          content: [{ type: "text", text: "ready" }],
+          stop_reason: "end_turn",
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    const model = createImpelClaudeModel({ modelId: "claude-opus-4-8" });
+    await model.doGenerate({
+      prompt: [{ role: "user", content: [{ type: "text", text: "query" }] }],
+      tools: [
+        {
+          type: "function",
+          name: "execute_query",
+          description: "Run a read-only SQL query",
+          inputSchema: {
+            type: "object",
+            properties: { sql: { type: "string" } },
+            required: ["sql"],
+            additionalProperties: false,
+          },
+        },
+      ],
+    });
+
+    assert.equal(requests.length, 1);
+    assert.equal(
+      requests[0].url,
+      "https://gateway.example/anthropic/v1/messages",
+    );
+    const headers = Object.fromEntries(
+      new Headers(requests[0].init.headers).entries(),
+    );
+    assert.equal(headers.authorization, "Bearer impel_pat_env");
+    const body = JSON.parse(String(requests[0].init.body));
+    assert.equal(body.model, "claude-opus-4-8");
+    assert.equal(body.tools?.[0]?.name, "execute_query");
+    assert.equal(body.tools?.[0]?.input_schema?.properties?.sql?.type, "string");
+  } finally {
+    globalThis.fetch = previousFetch;
     restoreEnv();
   }
 });

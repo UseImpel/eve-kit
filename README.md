@@ -10,7 +10,7 @@ the normal Eve filesystem layout: `agent.ts`, `channels/`, `sandbox/`,
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.50.tar.gz
+npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v0.2.51.tar.gz
 ```
 
 ## Eve Usage
@@ -67,7 +67,9 @@ is allowed only outside `NODE_ENV=production`, or when
 `IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK=true` / `allowLocalProviderFallback: true`
 is set for explicit local development.
 
-Claude uses the gateway Anthropic-compatible endpoint at `/anthropic`. Hosted
+Claude uses the gateway Anthropic-compatible endpoint at `/anthropic/v1` via
+the standard Anthropic AI SDK provider, so Eve's normal AI SDK tools are
+preserved through the gateway. Hosted
 Eve calls should carry the signed `clientContext.runToken`; static
 `IMPEL_GATEWAY_AUTH_TOKEN`, `IMPEL_GATEWAY_PAT`, or `gatewayAuthToken` auth is
 accepted for local tooling and break-glass use.
