@@ -14,6 +14,9 @@ const ENV_KEYS = [
   "IMPEL_GATEWAY_URL",
   "IMPEL_GATEWAY_AUTH_TOKEN",
   "IMPEL_GATEWAY_PAT",
+  "IMPEL_GATEWAY_API_KEY",
+  "IMPEL_RUN_TOKEN",
+  "IMPEL_PAT",
   "IMPEL_INFERENCE_URL",
   "IMPEL_INFERENCE_API_KEY",
   "IMPEL_ORG_ID",
@@ -197,6 +200,75 @@ test("gateway Claude model forwards AI SDK tools to Anthropic Messages", async (
     assert.equal(body.model, "claude-opus-4-8");
     assert.equal(body.tools?.[0]?.name, "execute_query");
     assert.equal(body.tools?.[0]?.input_schema?.properties?.sql?.type, "string");
+  } finally {
+    globalThis.fetch = previousFetch;
+    restoreEnv();
+  }
+});
+
+test("gateway Claude model uses packed Eve clientContext run token", async () => {
+  const restoreEnv = restoreEnvSnapshot();
+  const previousFetch = globalThis.fetch;
+  const requests = [];
+
+  try {
+    process.env.IMPEL_GATEWAY_URL = "https://gateway.example/";
+    delete process.env.IMPEL_GATEWAY_AUTH_TOKEN;
+    delete process.env.IMPEL_GATEWAY_PAT;
+    delete process.env.IMPEL_GATEWAY_API_KEY;
+    delete process.env.IMPEL_RUN_TOKEN;
+    delete process.env.IMPEL_PAT;
+    delete process.env.IMPEL_INFERENCE_URL;
+    delete process.env.IMPEL_INFERENCE_API_KEY;
+
+    globalThis.fetch = async (url, init = {}) => {
+      requests.push({ url: String(url), init });
+      return new Response(
+        JSON.stringify({
+          id: "msg_test",
+          type: "message",
+          role: "assistant",
+          model: "claude-opus-4-8",
+          content: [{ type: "text", text: "ready" }],
+          stop_reason: "end_turn",
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    const runToken = "impel_run_token_packed";
+    const model = createImpelClaudeModel({ modelId: "claude-opus-4-8" });
+    await model.doGenerate({
+      prompt: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Client context:\n${JSON.stringify({
+                orgId: "impel",
+                runId: "run_packed",
+                runToken,
+              })}`,
+            },
+            { type: "text", text: "Reply briefly: ready." },
+          ],
+        },
+      ],
+    });
+
+    assert.equal(requests.length, 1);
+    const headers = Object.fromEntries(
+      new Headers(requests[0].init.headers).entries(),
+    );
+    assert.equal(headers.authorization, `Bearer ${runToken}`);
+    assert.equal(String(requests[0].init.body).includes(runToken), false);
+    assert.equal(
+      String(requests[0].init.body).includes("<impel-run-token>"),
+      true,
+    );
   } finally {
     globalThis.fetch = previousFetch;
     restoreEnv();
