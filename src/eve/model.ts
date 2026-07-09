@@ -1,8 +1,8 @@
+import { createRequire } from "node:module";
 import type { LanguageModel } from "ai";
-import {
-  claudeCode,
-  type ClaudeCodeModelId,
-  type ClaudeCodeSettings,
+import type {
+  ClaudeCodeModelId,
+  ClaudeCodeSettings,
 } from "ai-sdk-provider-claude-code";
 import {
   impelGatewayClaudeModel,
@@ -21,6 +21,9 @@ export const IMPEL_DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";
 export const IMPEL_CODEX_CONTEXT_WINDOW_TOKENS = 200000;
 export const IMPEL_DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
 export const IMPEL_DEFAULT_OPENAI_RESPONSES_MODEL_ID = IMPEL_DEFAULT_CODEX_MODEL_ID;
+
+const require = createRequire(import.meta.url);
+type ClaudeCodeProviderModule = typeof import("ai-sdk-provider-claude-code");
 
 export interface ImpelClaudeProviderOptionsInput {
   providerOptions?: ClaudeCodeSettings;
@@ -300,10 +303,27 @@ export function createImpelClaudeModel(
     );
   }
 
-  return claudeCode(
+  return localClaudeCode(
     localModel ?? inferClaudeCodeLocalModel(modelId, defaultLocalModel),
     { ...resolvedProviderOptions, ...(localProviderOptions ?? {}) },
   );
+}
+
+function localClaudeCode(
+  modelId: ClaudeCodeModelId,
+  settings: ClaudeCodeSettings,
+): LanguageModel {
+  try {
+    const { claudeCode } = require(
+      "ai-sdk-provider-claude-code",
+    ) as ClaudeCodeProviderModule;
+    return claudeCode(modelId, settings);
+  } catch (error) {
+    throw new Error(
+      "ai-sdk-provider-claude-code is required only for local Claude Code fallback. Install it or configure IMPEL_GATEWAY_URL / IMPEL_INFERENCE_URL.",
+      { cause: error },
+    );
+  }
 }
 
 export function createImpelCodexModel(

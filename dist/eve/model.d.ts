@@ -1,5 +1,5 @@
 import type { LanguageModel } from "ai";
-import { type ClaudeCodeModelId, type ClaudeCodeSettings } from "ai-sdk-provider-claude-code";
+import type { ClaudeCodeModelId, ClaudeCodeSettings } from "ai-sdk-provider-claude-code";
 import { type ImpelInferenceHeaders, type ImpelInferenceOptions, type ImpelInferenceRunContextProvider } from "../index.js";
 export declare const IMPEL_CLAUDE_CONTEXT_WINDOW_TOKENS = 200000;
 export declare const IMPEL_DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";

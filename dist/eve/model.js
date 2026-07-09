@@ -1,4 +1,4 @@
-import { claudeCode, } from "ai-sdk-provider-claude-code";
+import { createRequire } from "node:module";
 import { impelGatewayClaudeModel, impelGatewayCodexModel, resolveImpelGatewayUrl, } from "./gateway-model.js";
 import { impelInference, } from "../index.js";
 export const IMPEL_CLAUDE_CONTEXT_WINDOW_TOKENS = 200000;
@@ -6,6 +6,7 @@ export const IMPEL_DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";
 export const IMPEL_CODEX_CONTEXT_WINDOW_TOKENS = 200000;
 export const IMPEL_DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
 export const IMPEL_DEFAULT_OPENAI_RESPONSES_MODEL_ID = IMPEL_DEFAULT_CODEX_MODEL_ID;
+const require = createRequire(import.meta.url);
 export function resolveImpelModelId(envNames, defaultModelId) {
     for (const name of envNames) {
         const value = process.env[name]?.trim();
@@ -153,7 +154,16 @@ export function createImpelClaudeModel(options = {}) {
     if (!allowLocalProviderFallback(explicitAllowLocalProviderFallback)) {
         throw new Error("IMPEL_GATEWAY_URL, IMPEL_INFERENCE_URL, or baseUrl is required for createImpelClaudeModel in production. Set IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK=true only for explicit local development.");
     }
-    return claudeCode(localModel ?? inferClaudeCodeLocalModel(modelId, defaultLocalModel), { ...resolvedProviderOptions, ...(localProviderOptions ?? {}) });
+    return localClaudeCode(localModel ?? inferClaudeCodeLocalModel(modelId, defaultLocalModel), { ...resolvedProviderOptions, ...(localProviderOptions ?? {}) });
+}
+function localClaudeCode(modelId, settings) {
+    try {
+        const { claudeCode } = require("ai-sdk-provider-claude-code");
+        return claudeCode(modelId, settings);
+    }
+    catch (error) {
+        throw new Error("ai-sdk-provider-claude-code is required only for local Claude Code fallback. Install it or configure IMPEL_GATEWAY_URL / IMPEL_INFERENCE_URL.", { cause: error });
+    }
 }
 export function createImpelCodexModel(options = {}) {
     const { modelId: explicitModelId, defaultModelId, providerOptions, approvalMode, sandboxMode, skipGitRepoCheck, effort, gatewayUrl, gatewayAuthToken, gatewayPat, ...inferenceOptions } = options;
