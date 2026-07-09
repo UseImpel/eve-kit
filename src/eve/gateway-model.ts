@@ -39,6 +39,7 @@ type GatewayAnthropicCallConfig = {
 
 const CLIENT_CONTEXT_SENTINEL = "Client context:\n";
 const DEFAULT_CODEX_HOME_ROOT = "/tmp/impel-gateway-codex";
+const GATEWAY_ANTHROPIC_USER_AGENT = "claude-code/impel-eve";
 const RUN_TOKEN_PLACEHOLDER = "<impel-run-token>";
 
 export interface ImpelGatewayClaudeModelOptions {
@@ -118,18 +119,24 @@ export function impelGatewayClaudeModel(
     };
   };
 
-  return {
-    ...probe,
-    provider: "anthropic.impel-gateway",
-    async doGenerate(options: LanguageModelV4CallOptions) {
-      const { inner, options: nextOptions } = await buildInner(options);
-      return inner.doGenerate(nextOptions);
+  const doGenerate = async (options: LanguageModelV4CallOptions) => {
+    const { inner, options: nextOptions } = await buildInner(options);
+    return inner.doGenerate(nextOptions);
+  };
+  const doStream = async (options: LanguageModelV4CallOptions) => {
+    const { inner, options: nextOptions } = await buildInner(options);
+    return inner.doStream(nextOptions);
+  };
+
+  return new Proxy(probe, {
+    get(target, prop, receiver) {
+      if (prop === "provider") return "anthropic.impel-gateway";
+      if (prop === "doGenerate") return doGenerate;
+      if (prop === "doStream") return doStream;
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
     },
-    async doStream(options: LanguageModelV4CallOptions) {
-      const { inner, options: nextOptions } = await buildInner(options);
-      return inner.doStream(nextOptions);
-    },
-  } as LanguageModelV4;
+  }) as LanguageModelV4;
 }
 
 function createGatewayAnthropicModel(args: {
@@ -280,10 +287,14 @@ export function buildGatewayAnthropicProviderSettings(args: {
   authToken: string;
   headers?: Record<string, string>;
 }): AnthropicProviderSettings {
+  const headers = {
+    "user-agent": GATEWAY_ANTHROPIC_USER_AGENT,
+    ...(args.headers ?? {}),
+  };
   return pruneUndefined({
     baseURL: `${withoutTrailingSlash(args.gatewayUrl)}/anthropic/v1`,
     authToken: args.authToken,
-    headers: args.headers,
+    headers,
     name: "anthropic.impel-gateway",
   }) as AnthropicProviderSettings;
 }

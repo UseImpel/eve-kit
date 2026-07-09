@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { streamText } from "ai";
 import {
   buildGatewayAnthropicProviderSettings,
   buildGatewayClaudeCodeSettings,
@@ -42,6 +43,22 @@ function sse(parts) {
         controller.enqueue(
           encoder.encode(
             `data: ${typeof part === "string" ? part : JSON.stringify(part)}\n\n`,
+          ),
+        );
+      }
+      controller.close();
+    },
+  });
+}
+
+function eventStream(events) {
+  return new ReadableStream({
+    start(controller) {
+      const encoder = new TextEncoder();
+      for (const event of events) {
+        controller.enqueue(
+          encoder.encode(
+            `event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`,
           ),
         );
       }
@@ -119,7 +136,10 @@ test("builds Anthropic provider settings for impel-gateway", () => {
 
   assert.equal(settings.baseURL, "https://gateway.useimpel.com/anthropic/v1");
   assert.equal(settings.authToken, "impel_pat_test");
-  assert.deepEqual(settings.headers, { "x-test": "1" });
+  assert.deepEqual(settings.headers, {
+    "user-agent": "claude-code/impel-eve",
+    "x-test": "1",
+  });
   assert.equal(settings.name, "anthropic.impel-gateway");
 });
 
@@ -196,6 +216,7 @@ test("gateway Claude model forwards AI SDK tools to Anthropic Messages", async (
       new Headers(requests[0].init.headers).entries(),
     );
     assert.equal(headers.authorization, "Bearer impel_pat_env");
+    assert.match(headers["user-agent"], /claude-code\/impel-eve/);
     const body = JSON.parse(String(requests[0].init.body));
     assert.equal(body.model, "claude-opus-4-8");
     assert.equal(body.tools?.[0]?.name, "execute_query");
@@ -264,11 +285,117 @@ test("gateway Claude model uses packed Eve clientContext run token", async () =>
       new Headers(requests[0].init.headers).entries(),
     );
     assert.equal(headers.authorization, `Bearer ${runToken}`);
+    assert.match(headers["user-agent"], /claude-code\/impel-eve/);
     assert.equal(String(requests[0].init.body).includes(runToken), false);
     assert.equal(
       String(requests[0].init.body).includes("<impel-run-token>"),
       true,
     );
+  } finally {
+    globalThis.fetch = previousFetch;
+    restoreEnv();
+  }
+});
+
+test("gateway Claude model streams through AI SDK with Eve run token", async () => {
+  const restoreEnv = restoreEnvSnapshot();
+  const previousFetch = globalThis.fetch;
+  const requests = [];
+
+  try {
+    process.env.IMPEL_GATEWAY_URL = "https://gateway.example/";
+    delete process.env.IMPEL_GATEWAY_AUTH_TOKEN;
+    delete process.env.IMPEL_GATEWAY_PAT;
+    delete process.env.IMPEL_GATEWAY_API_KEY;
+    delete process.env.IMPEL_RUN_TOKEN;
+    delete process.env.IMPEL_PAT;
+    delete process.env.IMPEL_INFERENCE_URL;
+    delete process.env.IMPEL_INFERENCE_API_KEY;
+
+    globalThis.fetch = async (url, init = {}) => {
+      requests.push({ url: String(url), init });
+      return new Response(
+        eventStream([
+          {
+            event: "message_start",
+            data: {
+              type: "message_start",
+              message: {
+                id: "msg_test",
+                type: "message",
+                role: "assistant",
+                model: "claude-opus-4-8",
+                content: [],
+                stop_reason: null,
+                stop_sequence: null,
+                usage: { input_tokens: 1, output_tokens: 0 },
+              },
+            },
+          },
+          {
+            event: "content_block_start",
+            data: {
+              type: "content_block_start",
+              index: 0,
+              content_block: { type: "text", text: "" },
+            },
+          },
+          {
+            event: "content_block_delta",
+            data: {
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "text_delta", text: "ready" },
+            },
+          },
+          {
+            event: "content_block_stop",
+            data: { type: "content_block_stop", index: 0 },
+          },
+          {
+            event: "message_delta",
+            data: {
+              type: "message_delta",
+              delta: { stop_reason: "end_turn", stop_sequence: null },
+              usage: { output_tokens: 1 },
+            },
+          },
+          { event: "message_stop", data: { type: "message_stop" } },
+        ]),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    };
+
+    const runToken = "impel_run_token_stream";
+    const model = createImpelClaudeModel({ modelId: "claude-opus-4-8" });
+    const result = streamText({
+      model,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Client context:\n${JSON.stringify({
+                orgId: "impel",
+                runId: "run_stream",
+                runToken,
+              })}`,
+            },
+            { type: "text", text: "Reply briefly: ready." },
+          ],
+        },
+      ],
+    });
+
+    assert.equal(await result.text, "ready");
+    assert.equal(requests.length, 1);
+    const headers = Object.fromEntries(
+      new Headers(requests[0].init.headers).entries(),
+    );
+    assert.equal(headers.authorization, `Bearer ${runToken}`);
+    assert.match(headers["user-agent"], /claude-code\/impel-eve/);
+    assert.equal(String(requests[0].init.body).includes(runToken), false);
   } finally {
     globalThis.fetch = previousFetch;
     restoreEnv();
