@@ -80,11 +80,16 @@ export interface ImpelPlannedRepoCheckout {
 
 export interface ImpelEveChannelState {
   runContext: ImpelEveRunContext | null;
-  // Signed run token from the raw clientContext, carried OUTSIDE the typed run
-  // context so it can never reach channel metadata() or workspace keys. Used
-  // only to authenticate workspace-prep GitHub resolution against the
-  // impel-identity service (dark unless IMPEL_IDENTITY_URL is set).
-  workspaceAuth: { runToken: string | null };
+  // Signed v1 server assertion from raw clientContext.identityRunToken,
+  // carried OUTSIDE the typed run context so it can never reach channel
+  // metadata() or workspace keys. Used only to authenticate workspace-prep
+  // GitHub resolution against impel-identity (dark unless
+  // IMPEL_IDENTITY_URL is set).
+  workspaceAuth: {
+    identityRunToken?: string | null;
+    /** @deprecated Read-only compatibility for serialized pre-v1 sessions. */
+    runToken?: string | null;
+  };
   workspace: {
     prepared: boolean;
     sandboxId: string | null;
@@ -114,6 +119,29 @@ export interface PrepareImpelEveWorkspaceOptions {
   checkoutDepth?: number;
   referenceRepos?: readonly string[];
   getSandbox: () => Promise<SandboxSession>;
+}
+
+export type ImpelIdentityResolveErrorCode =
+  | "http_error"
+  | "invalid_assertion"
+  | "invalid_response"
+  | "unreachable";
+
+/** Safe, token-free failure from the centralized impel-identity resolver. */
+export class ImpelIdentityResolveError extends Error {
+  readonly code: ImpelIdentityResolveErrorCode;
+  readonly status?: number;
+
+  constructor(options: {
+    code: ImpelIdentityResolveErrorCode;
+    message: string;
+    status?: number;
+  }) {
+    super(options.message);
+    this.name = "ImpelIdentityResolveError";
+    this.code = options.code;
+    this.status = options.status;
+  }
 }
 
 interface GitHubRepoRef {
@@ -220,11 +248,17 @@ export function defaultImpelEveChannel({
 
 export function createImpelEveChannelState(
   runContext: ImpelEveRunContext | null,
-  workspaceAuth?: { runToken?: string | null },
+  workspaceAuth?: {
+    identityRunToken?: string | null;
+    /** @deprecated Accepted only for serialized pre-v1 state. */
+    runToken?: string | null;
+  },
 ): ImpelEveChannelState {
   return {
     runContext,
-    workspaceAuth: { runToken: workspaceAuth?.runToken ?? null },
+    workspaceAuth: {
+      identityRunToken: readWorkspaceIdentityRunToken(workspaceAuth),
+    },
     workspace: {
       prepared: false,
       sandboxId: null,
@@ -252,9 +286,7 @@ export async function extractImpelEveRunContextFromRequest(
   return normalizeImpelEveRunContext(body.clientContext);
 }
 
-// Reads the signed run token off the raw clientContext for channel-state
-// workspaceAuth. Kept separate from normalizeImpelEveRunContext on purpose —
-// see the note below.
+// Reads the gateway token without ever treating it as an identity assertion.
 export function readClientContextRunToken(value: unknown): string | null {
   if (!isRecord(value)) return null;
   return typeof value.runToken === "string" && value.runToken.length > 0
@@ -262,10 +294,38 @@ export function readClientContextRunToken(value: unknown): string | null {
     : null;
 }
 
-// clientContext.runToken is deliberately NOT part of the typed channel context:
-// the raw clientContext sentinel (normalizeClientContextMessages) is the sole
-// carrier to the provider, keeping the credential out of channel metadata()
-// and workspace keys.
+// Reads the dedicated v1 server assertion for workspace identity resolution.
+// Older callers may reuse runToken only when it is itself v1 and the dedicated
+// field is absent. A gateway-audience v2 token is never sent to identity.
+export function readClientContextIdentityRunToken(
+  value: unknown,
+): string | null {
+  if (!isRecord(value)) return null;
+  if (Object.prototype.hasOwnProperty.call(value, "identityRunToken")) {
+    return readString(value.identityRunToken) ?? null;
+  }
+  return readV1RunToken(value.runToken);
+}
+
+function readWorkspaceIdentityRunToken(
+  value:
+    | {
+        identityRunToken?: string | null;
+        runToken?: string | null;
+      }
+    | undefined,
+): string | null {
+  if (!value) return null;
+  if (Object.prototype.hasOwnProperty.call(value, "identityRunToken")) {
+    return readString(value.identityRunToken) ?? null;
+  }
+  return readV1RunToken(value.runToken);
+}
+
+// clientContext.runToken and identityRunToken are deliberately NOT part of the
+// typed channel context: the raw clientContext sentinel
+// (normalizeClientContextMessages) is the sole carrier to the gateway wrapper,
+// keeping both credentials out of channel metadata() and workspace keys.
 export function normalizeImpelEveRunContext(
   value: unknown,
 ): ImpelEveRunContext | null {
@@ -393,7 +453,7 @@ export async function prepareImpelEveWorkspace(
 
   try {
     const token = await resolveGitHubAccessToken(runContext, {
-      runToken: state.workspaceAuth.runToken,
+      identityRunToken: readWorkspaceIdentityRunToken(state.workspaceAuth),
     });
     await sandbox.setNetworkPolicy(buildGitHubBrokerNetworkPolicy(token));
     await configureGitHubCliAuthMarker(sandbox);
@@ -558,7 +618,7 @@ async function prepareReferenceRepoAccess(
     const token = await resolveGitHubAccessToken(referenceRunContext, {
       scopeRepositories: githubRepositoryNamesFromRunContext(referenceRunContext),
       readOnly: true,
-      runToken: state.workspaceAuth.runToken,
+      identityRunToken: readWorkspaceIdentityRunToken(state.workspaceAuth),
     });
     await sandbox.setNetworkPolicy(buildGitHubBrokerNetworkPolicy(token));
     await configureGitHubCliAuthMarker(sandbox);
@@ -600,7 +660,11 @@ function createImpelEveRoutes(auth: readonly AuthFn<Request>[]) {
 
       const state = createImpelEveChannelState(
         normalizeImpelEveRunContext(parsed.clientContext),
-        { runToken: readClientContextRunToken(parsed.clientContext) },
+        {
+          identityRunToken: readClientContextIdentityRunToken(
+            parsed.clientContext,
+          ),
+        },
       );
       const session = await args.send(
         createSendPayload(parsed),
@@ -653,7 +717,11 @@ function createImpelEveRoutes(auth: readonly AuthFn<Request>[]) {
 
         const state = createImpelEveChannelState(
           normalizeImpelEveRunContext(parsed.clientContext),
-          { runToken: readClientContextRunToken(parsed.clientContext) },
+          {
+            identityRunToken: readClientContextIdentityRunToken(
+              parsed.clientContext,
+            ),
+          },
         );
         const session = await args.send(
           createSendPayload(parsed),
@@ -1331,30 +1399,38 @@ const REFERENCE_REPO_INSTALLATION_PERMISSIONS = {
 interface ResolveGitHubAccessTokenOptions {
   scopeRepositories?: readonly string[];
   readOnly?: boolean;
-  runToken?: string | null;
+  identityRunToken?: string | null;
 }
 
 // Centralized resolution through the impel-identity service. Dark unless the
-// deployment sets IMPEL_IDENTITY_URL AND the dispatcher sent a signed run
-// token (next's IMPEL_RUNTIME_RUN_TOKEN flag). The service resolves the org's
-// registry entry itself — the caller-asserted installationId is not consulted.
-// Any failure falls through to the local resolution chain below.
+// deployment sets IMPEL_IDENTITY_URL AND the dispatcher sent a signed v1
+// identityRunToken. The service resolves the org's registry entry itself — the
+// caller-asserted installationId is not consulted. Once this explicit
+// centralized path is selected, every HTTP/network/payload failure fails closed
+// instead of falling through to broader local credentials.
 async function resolveImpelIdentityGitHubToken(
   runContext: ImpelEveRunContext,
   options: ResolveGitHubAccessTokenOptions,
 ): Promise<string | null> {
   const baseUrl = process.env.IMPEL_IDENTITY_URL?.trim();
-  const runToken = options.runToken ?? null;
-  if (!baseUrl || !runToken) return null;
+  const identityRunToken = options.identityRunToken ?? null;
+  if (!baseUrl || !identityRunToken) return null;
+  if (!identityRunToken.startsWith("v1.")) {
+    throw new ImpelIdentityResolveError({
+      code: "invalid_assertion",
+      message: "Impel identity resolution requires a v1 server assertion.",
+    });
+  }
   const repos =
     options.scopeRepositories ??
     (runContext.repos?.length ? runContext.repos : undefined);
+  let response: Response;
   try {
-    const response = await fetch(new URL("/v1/resolve", baseUrl), {
+    response = await fetch(new URL("/v1/resolve", baseUrl), {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-impel-run-token": runToken,
+        "x-impel-run-token": identityRunToken,
       },
       body: JSON.stringify({
         provider: "github",
@@ -1364,22 +1440,37 @@ async function resolveImpelIdentityGitHubToken(
       }),
       signal: AbortSignal.timeout(7_000),
     });
-    if (!response.ok) {
-      console.warn(
-        `impel-identity resolve failed (HTTP ${response.status}); falling back to local GitHub resolution`,
-      );
-      return null;
-    }
-    const payload = (await response.json()) as { token?: unknown };
-    return typeof payload.token === "string" && payload.token.length > 0
-      ? payload.token
-      : null;
-  } catch (error) {
-    console.warn(
-      `impel-identity resolve unreachable (${error instanceof Error ? error.message : "unknown error"}); falling back to local GitHub resolution`,
-    );
-    return null;
+  } catch {
+    throw new ImpelIdentityResolveError({
+      code: "unreachable",
+      message: "Impel identity resolution is unavailable.",
+    });
   }
+  if (!response.ok) {
+    throw new ImpelIdentityResolveError({
+      code: "http_error",
+      message: `Impel identity resolution failed with HTTP ${response.status}.`,
+      status: response.status,
+    });
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new ImpelIdentityResolveError({
+      code: "invalid_response",
+      message: "Impel identity resolution returned an invalid response.",
+    });
+  }
+  const token = isRecord(payload) ? readString(payload.token) : undefined;
+  if (!token) {
+    throw new ImpelIdentityResolveError({
+      code: "invalid_response",
+      message: "Impel identity resolution returned an empty token.",
+    });
+  }
+  return token;
 }
 
 async function resolveGitHubAccessToken(
@@ -1388,8 +1479,9 @@ async function resolveGitHubAccessToken(
 ): Promise<string> {
   const { scopeRepositories, readOnly = false } = options;
 
-  // When a deployment opts into centralized resolution, the service wins over
-  // every local path (including stray static tokens).
+  // When a deployment opts into centralized resolution and supplies its v1
+  // assertion, the service wins over every local path (including stray static
+  // tokens) and its failures are terminal.
   const identityToken = await resolveImpelIdentityGitHubToken(
     runContext,
     options,
@@ -1660,6 +1752,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readV1RunToken(value: unknown): string | null {
+  const token = readString(value);
+  return token?.startsWith("v1.") ? token : null;
 }
 
 function stripUndefined<T extends Record<string, unknown>>(value: T): T {

@@ -25,7 +25,7 @@ export function impelJustBashSandbox(): SandboxDefinition {
 }
 
 export function impelDefaultSandbox({
-  backend = { vercel: { runtime: "node24", resources: { vcpus: 2 } } },
+  backend = { vercel: { resources: { vcpus: 2 } } },
   installWorkspaceTools = true,
 }: ImpelDefaultSandboxOptions = {}): SandboxDefinition {
   return defineSandbox({

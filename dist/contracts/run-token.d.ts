@@ -16,6 +16,47 @@ export interface VerifiedRunToken {
     liveblocksUserId?: string;
     agentId?: string;
 }
+export declare const RUN_TOKEN_V2_VERSION = "v2";
+export declare const RUN_TOKEN_V2_ISSUER = "urn:useimpel:next";
+export declare const RUN_TOKEN_V2_AUDIENCE = "urn:useimpel:gateway:inference";
+export declare const RUN_TOKEN_V2_MAX_LIFETIME_SECONDS = 4500;
+export declare const RUN_TOKEN_V2_CLOCK_SKEW_SECONDS = 60;
+export declare const RUN_TOKEN_V2_MAX_TOKEN_BYTES: number;
+export declare const RUN_TOKEN_V2_SCOPES: readonly ["claude-code-gateway", "codex-gateway"];
+export type RunTokenV2Scope = (typeof RUN_TOKEN_V2_SCOPES)[number];
+/**
+ * Capability-scoped hosted inference token claims.
+ *
+ * Keep this capability on the server-only Next → Eve → gateway path. It must
+ * never be exposed to browser clients.
+ */
+export interface RunTokenV2Payload {
+    iss: typeof RUN_TOKEN_V2_ISSUER;
+    aud: typeof RUN_TOKEN_V2_AUDIENCE;
+    orgId: string;
+    runId: string;
+    impelUserId?: string;
+    liveblocksUserId?: string;
+    agentId?: string;
+    /** Issued-at time as Unix epoch seconds. */
+    iat: number;
+    /** Expiration time as Unix epoch seconds. */
+    exp: number;
+    /** Exactly one provider capability is required. */
+    scopes: readonly [RunTokenV2Scope];
+}
+export interface VerifiedRunTokenV2 {
+    iss: typeof RUN_TOKEN_V2_ISSUER;
+    aud: typeof RUN_TOKEN_V2_AUDIENCE;
+    orgId: string;
+    runId: string;
+    impelUserId?: string;
+    liveblocksUserId?: string;
+    agentId?: string;
+    iat: number;
+    exp: number;
+    scopes: [RunTokenV2Scope];
+}
 export type RunTokenErrorCode = "invalid_payload" | "invalid_secret" | "invalid_token" | "invalid_signature" | "expired";
 export declare class RunTokenError extends Error {
     readonly code: RunTokenErrorCode;
@@ -27,4 +68,16 @@ export declare class RunTokenError extends Error {
 export declare const RUN_TOKEN_HEADER = "x-impel-run-token";
 export declare function signRunToken(payload: RunTokenPayload, secret: string): string;
 export declare function verifyRunToken(token: string, secret: string, now?: number): VerifiedRunToken;
+/**
+ * Signs the deterministic v2 compact wire format.
+ *
+ * JSON field order is part of the cross-language compatibility contract:
+ * iss, aud, orgId, runId, optional attribution, iat, exp, scopes.
+ */
+export declare function signRunTokenV2(payload: RunTokenV2Payload, secret: string): string;
+export declare function verifyRunTokenV2(token: string, secret: string, now?: number): VerifiedRunTokenV2;
+/** Canonical Next-facing name for the v2 hosted inference capability. */
+export declare const signGatewayRunToken: typeof signRunTokenV2;
+/** Canonical gateway-facing name for the v2 hosted inference capability. */
+export declare const verifyGatewayRunToken: typeof verifyRunTokenV2;
 //# sourceMappingURL=run-token.d.ts.map

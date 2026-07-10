@@ -117,10 +117,10 @@ export declare const renderUiElementSchema: z.ZodUnion<readonly [z.ZodObject<{
     type: z.ZodLiteral<"Callout">;
     props: z.ZodObject<{
         tone: z.ZodOptional<z.ZodEnum<{
-            success: "success";
-            info: "info";
-            warning: "warning";
             danger: "danger";
+            info: "info";
+            success: "success";
+            warning: "warning";
         }>>;
         title: z.ZodOptional<z.ZodString>;
     }, z.core.$strict> | z.ZodOptional<z.ZodObject<{}, z.core.$strict>>;
@@ -231,13 +231,13 @@ export declare const renderUiElementSchema: z.ZodUnion<readonly [z.ZodObject<{
         title: z.ZodString;
         detail: z.ZodOptional<z.ZodString>;
         status: z.ZodOptional<z.ZodEnum<{
+            doing: "doing";
             done: "done";
             todo: "todo";
-            doing: "doing";
         }>>;
         priority: z.ZodOptional<z.ZodEnum<{
-            low: "low";
             high: "high";
+            low: "low";
             med: "med";
         }>>;
     }, z.core.$strict> | z.ZodOptional<z.ZodObject<{}, z.core.$strict>>;
@@ -400,11 +400,11 @@ export declare const renderUiElementSchema: z.ZodUnion<readonly [z.ZodObject<{
     props: z.ZodObject<{
         label: z.ZodString;
         tone: z.ZodOptional<z.ZodEnum<{
-            success: "success";
-            info: "info";
-            warning: "warning";
             danger: "danger";
+            info: "info";
             neutral: "neutral";
+            success: "success";
+            warning: "warning";
         }>>;
     }, z.core.$strict> | z.ZodOptional<z.ZodObject<{}, z.core.$strict>>;
 }, z.core.$strict>, z.ZodObject<{
@@ -678,15 +678,15 @@ export declare const renderUiElementSchema: z.ZodUnion<readonly [z.ZodObject<{
     type: z.ZodLiteral<"Chart">;
     props: z.ZodObject<{
         kind: z.ZodEnum<{
+            area: "area";
             bar: "bar";
             line: "line";
-            area: "area";
             pie: "pie";
         }>;
         kinds: z.ZodOptional<z.ZodArray<z.ZodEnum<{
+            area: "area";
             bar: "bar";
             line: "line";
-            area: "area";
             pie: "pie";
         }>>>;
         title: z.ZodOptional<z.ZodString>;
@@ -701,9 +701,9 @@ export declare const renderUiElementSchema: z.ZodUnion<readonly [z.ZodObject<{
             label: z.ZodString;
             target: z.ZodString;
             transform: z.ZodEnum<{
+                compound: "compound";
                 delta: "delta";
                 multiplier: "multiplier";
-                compound: "compound";
             }>;
             min: z.ZodNumber;
             max: z.ZodNumber;
@@ -831,10 +831,10 @@ export declare const renderUiTreeSchema: z.ZodObject<{
         type: z.ZodLiteral<"Callout">;
         props: z.ZodObject<{
             tone: z.ZodOptional<z.ZodEnum<{
-                success: "success";
-                info: "info";
-                warning: "warning";
                 danger: "danger";
+                info: "info";
+                success: "success";
+                warning: "warning";
             }>>;
             title: z.ZodOptional<z.ZodString>;
         }, z.core.$strict> | z.ZodOptional<z.ZodObject<{}, z.core.$strict>>;
@@ -945,13 +945,13 @@ export declare const renderUiTreeSchema: z.ZodObject<{
             title: z.ZodString;
             detail: z.ZodOptional<z.ZodString>;
             status: z.ZodOptional<z.ZodEnum<{
+                doing: "doing";
                 done: "done";
                 todo: "todo";
-                doing: "doing";
             }>>;
             priority: z.ZodOptional<z.ZodEnum<{
-                low: "low";
                 high: "high";
+                low: "low";
                 med: "med";
             }>>;
         }, z.core.$strict> | z.ZodOptional<z.ZodObject<{}, z.core.$strict>>;
@@ -1114,11 +1114,11 @@ export declare const renderUiTreeSchema: z.ZodObject<{
         props: z.ZodObject<{
             label: z.ZodString;
             tone: z.ZodOptional<z.ZodEnum<{
-                success: "success";
-                info: "info";
-                warning: "warning";
                 danger: "danger";
+                info: "info";
                 neutral: "neutral";
+                success: "success";
+                warning: "warning";
             }>>;
         }, z.core.$strict> | z.ZodOptional<z.ZodObject<{}, z.core.$strict>>;
     }, z.core.$strict>, z.ZodObject<{
@@ -1392,15 +1392,15 @@ export declare const renderUiTreeSchema: z.ZodObject<{
         type: z.ZodLiteral<"Chart">;
         props: z.ZodObject<{
             kind: z.ZodEnum<{
+                area: "area";
                 bar: "bar";
                 line: "line";
-                area: "area";
                 pie: "pie";
             }>;
             kinds: z.ZodOptional<z.ZodArray<z.ZodEnum<{
+                area: "area";
                 bar: "bar";
                 line: "line";
-                area: "area";
                 pie: "pie";
             }>>>;
             title: z.ZodOptional<z.ZodString>;
@@ -1415,9 +1415,9 @@ export declare const renderUiTreeSchema: z.ZodObject<{
                 label: z.ZodString;
                 target: z.ZodString;
                 transform: z.ZodEnum<{
+                    compound: "compound";
                     delta: "delta";
                     multiplier: "multiplier";
-                    compound: "compound";
                 }>;
                 min: z.ZodNumber;
                 max: z.ZodNumber;
@@ -1548,10 +1548,10 @@ export declare const renderUiInputSchema: z.ZodObject<{
             type: z.ZodLiteral<"Callout">;
             props: z.ZodObject<{
                 tone: z.ZodOptional<z.ZodEnum<{
-                    success: "success";
-                    info: "info";
-                    warning: "warning";
                     danger: "danger";
+                    info: "info";
+                    success: "success";
+                    warning: "warning";
                 }>>;
                 title: z.ZodOptional<z.ZodString>;
             }, z.core.$strict> | z.ZodOptional<z.ZodObject<{}, z.core.$strict>>;
@@ -1662,13 +1662,13 @@ export declare const renderUiInputSchema: z.ZodObject<{
                 title: z.ZodString;
                 detail: z.ZodOptional<z.ZodString>;
                 status: z.ZodOptional<z.ZodEnum<{
+                    doing: "doing";
                     done: "done";
                     todo: "todo";
-                    doing: "doing";
                 }>>;
                 priority: z.ZodOptional<z.ZodEnum<{
-                    low: "low";
                     high: "high";
+                    low: "low";
                     med: "med";
                 }>>;
             }, z.core.$strict> | z.ZodOptional<z.ZodObject<{}, z.core.$strict>>;
@@ -1831,11 +1831,11 @@ export declare const renderUiInputSchema: z.ZodObject<{
             props: z.ZodObject<{
                 label: z.ZodString;
                 tone: z.ZodOptional<z.ZodEnum<{
-                    success: "success";
-                    info: "info";
-                    warning: "warning";
                     danger: "danger";
+                    info: "info";
                     neutral: "neutral";
+                    success: "success";
+                    warning: "warning";
                 }>>;
             }, z.core.$strict> | z.ZodOptional<z.ZodObject<{}, z.core.$strict>>;
         }, z.core.$strict>, z.ZodObject<{
@@ -2109,15 +2109,15 @@ export declare const renderUiInputSchema: z.ZodObject<{
             type: z.ZodLiteral<"Chart">;
             props: z.ZodObject<{
                 kind: z.ZodEnum<{
+                    area: "area";
                     bar: "bar";
                     line: "line";
-                    area: "area";
                     pie: "pie";
                 }>;
                 kinds: z.ZodOptional<z.ZodArray<z.ZodEnum<{
+                    area: "area";
                     bar: "bar";
                     line: "line";
-                    area: "area";
                     pie: "pie";
                 }>>>;
                 title: z.ZodOptional<z.ZodString>;
@@ -2132,9 +2132,9 @@ export declare const renderUiInputSchema: z.ZodObject<{
                     label: z.ZodString;
                     target: z.ZodString;
                     transform: z.ZodEnum<{
+                        compound: "compound";
                         delta: "delta";
                         multiplier: "multiplier";
-                        compound: "compound";
                     }>;
                     min: z.ZodNumber;
                     max: z.ZodNumber;
@@ -2168,10 +2168,63 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
     tree: {
         root: string;
         elements: Record<string, {
+            children?: string[] | undefined;
+            visible?: unknown;
+            on?: Record<string, {
+                [x: string]: unknown;
+                action: string;
+                params?: Record<string, unknown> | undefined;
+                preventDefault?: boolean | undefined;
+                confirm?: {
+                    title?: string | undefined;
+                    description?: string | undefined;
+                    confirmLabel?: string | undefined;
+                    cancelLabel?: string | undefined;
+                } | undefined;
+            }[] | {
+                [x: string]: unknown;
+                action: string;
+                params?: Record<string, unknown> | undefined;
+                preventDefault?: boolean | undefined;
+                confirm?: {
+                    title?: string | undefined;
+                    description?: string | undefined;
+                    confirmLabel?: string | undefined;
+                    cancelLabel?: string | undefined;
+                } | undefined;
+            }> | undefined;
+            repeat?: {
+                statePath: string;
+                key?: string | undefined;
+            } | undefined;
+            watch?: Record<string, {
+                [x: string]: unknown;
+                action: string;
+                params?: Record<string, unknown> | undefined;
+                preventDefault?: boolean | undefined;
+                confirm?: {
+                    title?: string | undefined;
+                    description?: string | undefined;
+                    confirmLabel?: string | undefined;
+                    cancelLabel?: string | undefined;
+                } | undefined;
+            }[] | {
+                [x: string]: unknown;
+                action: string;
+                params?: Record<string, unknown> | undefined;
+                preventDefault?: boolean | undefined;
+                confirm?: {
+                    title?: string | undefined;
+                    description?: string | undefined;
+                    confirmLabel?: string | undefined;
+                    cancelLabel?: string | undefined;
+                } | undefined;
+            }> | undefined;
             type: "Section";
             props: Record<string, never> | {
                 title?: string | undefined;
             } | undefined;
+        } | {
             children?: string[] | undefined;
             visible?: unknown;
             on?: Record<string, {
@@ -2185,7 +2238,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2196,7 +2249,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
+            }> | undefined;
             repeat?: {
                 statePath: string;
                 key?: string | undefined;
@@ -2212,7 +2265,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2223,13 +2276,13 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
-        } | {
+            }> | undefined;
             type: "Callout";
             props: Record<string, never> | {
-                tone?: "success" | "info" | "warning" | "danger" | undefined;
+                tone?: "danger" | "info" | "success" | "warning" | undefined;
                 title?: string | undefined;
             } | undefined;
+        } | {
             children?: string[] | undefined;
             visible?: unknown;
             on?: Record<string, {
@@ -2243,7 +2296,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2254,7 +2307,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
+            }> | undefined;
             repeat?: {
                 statePath: string;
                 key?: string | undefined;
@@ -2270,7 +2323,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2281,12 +2334,12 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
-        } | {
+            }> | undefined;
             type: "ActionList";
             props: Record<string, never> | {
                 title?: string | undefined;
             } | undefined;
+        } | {
             children?: string[] | undefined;
             visible?: unknown;
             on?: Record<string, {
@@ -2300,7 +2353,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2311,7 +2364,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
+            }> | undefined;
             repeat?: {
                 statePath: string;
                 key?: string | undefined;
@@ -2327,7 +2380,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2338,15 +2391,15 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
-        } | {
+            }> | undefined;
             type: "ActionItem";
             props: Record<string, never> | {
                 title: string;
                 detail?: string | undefined;
-                status?: "done" | "todo" | "doing" | undefined;
-                priority?: "low" | "high" | "med" | undefined;
+                status?: "doing" | "done" | "todo" | undefined;
+                priority?: "high" | "low" | "med" | undefined;
             } | undefined;
+        } | {
             children?: string[] | undefined;
             visible?: unknown;
             on?: Record<string, {
@@ -2360,7 +2413,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2371,7 +2424,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
+            }> | undefined;
             repeat?: {
                 statePath: string;
                 key?: string | undefined;
@@ -2387,7 +2440,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2398,14 +2451,14 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
-        } | {
+            }> | undefined;
             type: "Stat";
             props: Record<string, never> | {
                 label: string;
                 value: string;
                 delta?: string | undefined;
             } | undefined;
+        } | {
             children?: string[] | undefined;
             visible?: unknown;
             on?: Record<string, {
@@ -2419,7 +2472,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2430,7 +2483,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
+            }> | undefined;
             repeat?: {
                 statePath: string;
                 key?: string | undefined;
@@ -2446,7 +2499,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2457,10 +2510,10 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
-        } | {
+            }> | undefined;
             type: "StatGroup";
             props: Record<string, never> | undefined;
+        } | {
             children?: string[] | undefined;
             visible?: unknown;
             on?: Record<string, {
@@ -2474,7 +2527,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2485,7 +2538,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
+            }> | undefined;
             repeat?: {
                 statePath: string;
                 key?: string | undefined;
@@ -2501,7 +2554,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2512,13 +2565,13 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
-        } | {
+            }> | undefined;
             type: "Badge";
             props: Record<string, never> | {
                 label: string;
-                tone?: "success" | "info" | "warning" | "danger" | "neutral" | undefined;
+                tone?: "danger" | "info" | "neutral" | "success" | "warning" | undefined;
             } | undefined;
+        } | {
             children?: string[] | undefined;
             visible?: unknown;
             on?: Record<string, {
@@ -2532,7 +2585,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2543,7 +2596,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
+            }> | undefined;
             repeat?: {
                 statePath: string;
                 key?: string | undefined;
@@ -2559,7 +2612,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2570,8 +2623,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
-        } | {
+            }> | undefined;
             type: "KeyValue";
             props: Record<string, never> | {
                 pairs: {
@@ -2579,6 +2631,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     value: string;
                 }[];
             } | undefined;
+        } | {
             children?: string[] | undefined;
             visible?: unknown;
             on?: Record<string, {
@@ -2592,7 +2645,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2603,7 +2656,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
+            }> | undefined;
             repeat?: {
                 statePath: string;
                 key?: string | undefined;
@@ -2619,7 +2672,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2630,14 +2683,14 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
-        } | {
+            }> | undefined;
             type: "CodeRef";
             props: Record<string, never> | {
                 path: string;
                 line?: number | undefined;
                 label?: string | undefined;
             } | undefined;
+        } | {
             children?: string[] | undefined;
             visible?: unknown;
             on?: Record<string, {
@@ -2651,7 +2704,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2662,7 +2715,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
+            }> | undefined;
             repeat?: {
                 statePath: string;
                 key?: string | undefined;
@@ -2678,7 +2731,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2689,14 +2742,14 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
-        } | {
+            }> | undefined;
             type: "SourceLink";
             props: Record<string, never> | {
                 url: string;
                 title?: string | undefined;
                 snippet?: string | undefined;
             } | undefined;
+        } | {
             children?: string[] | undefined;
             visible?: unknown;
             on?: Record<string, {
@@ -2710,7 +2763,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2721,7 +2774,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
+            }> | undefined;
             repeat?: {
                 statePath: string;
                 key?: string | undefined;
@@ -2737,7 +2790,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2748,12 +2801,12 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
-        } | {
+            }> | undefined;
             type: "Text";
             props: Record<string, never> | {
                 content: string;
             } | undefined;
+        } | {
             children?: string[] | undefined;
             visible?: unknown;
             on?: Record<string, {
@@ -2767,7 +2820,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2778,7 +2831,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
+            }> | undefined;
             repeat?: {
                 statePath: string;
                 key?: string | undefined;
@@ -2794,7 +2847,7 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            } | {
+            }[] | {
                 [x: string]: unknown;
                 action: string;
                 params?: Record<string, unknown> | undefined;
@@ -2805,12 +2858,11 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     confirmLabel?: string | undefined;
                     cancelLabel?: string | undefined;
                 } | undefined;
-            }[]> | undefined;
-        } | {
+            }> | undefined;
             type: "Chart";
             props: Record<string, never> | {
-                kind: "bar" | "line" | "area" | "pie";
-                kinds?: ("bar" | "line" | "area" | "pie")[] | undefined;
+                kind: "area" | "bar" | "line" | "pie";
+                kinds?: ("area" | "bar" | "line" | "pie")[] | undefined;
                 title?: string | undefined;
                 data?: Record<string, string | number>[] | undefined;
                 scenarios?: {
@@ -2822,11 +2874,11 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                     id: string;
                     label: string;
                     target: string;
-                    transform: "delta" | "multiplier" | "compound";
+                    transform: "compound" | "delta" | "multiplier";
                     min: number;
                     max: number;
-                    value: number;
                     step?: number | undefined;
+                    value: number;
                     unit?: string | undefined;
                 }[] | undefined;
                 xKey?: string | undefined;
@@ -2841,58 +2893,6 @@ export declare const renderUiTool: import("eve/tools").ToolDefinition<{
                 height?: number | undefined;
                 unit?: string | undefined;
             } | undefined;
-            children?: string[] | undefined;
-            visible?: unknown;
-            on?: Record<string, {
-                [x: string]: unknown;
-                action: string;
-                params?: Record<string, unknown> | undefined;
-                preventDefault?: boolean | undefined;
-                confirm?: {
-                    title?: string | undefined;
-                    description?: string | undefined;
-                    confirmLabel?: string | undefined;
-                    cancelLabel?: string | undefined;
-                } | undefined;
-            } | {
-                [x: string]: unknown;
-                action: string;
-                params?: Record<string, unknown> | undefined;
-                preventDefault?: boolean | undefined;
-                confirm?: {
-                    title?: string | undefined;
-                    description?: string | undefined;
-                    confirmLabel?: string | undefined;
-                    cancelLabel?: string | undefined;
-                } | undefined;
-            }[]> | undefined;
-            repeat?: {
-                statePath: string;
-                key?: string | undefined;
-            } | undefined;
-            watch?: Record<string, {
-                [x: string]: unknown;
-                action: string;
-                params?: Record<string, unknown> | undefined;
-                preventDefault?: boolean | undefined;
-                confirm?: {
-                    title?: string | undefined;
-                    description?: string | undefined;
-                    confirmLabel?: string | undefined;
-                    cancelLabel?: string | undefined;
-                } | undefined;
-            } | {
-                [x: string]: unknown;
-                action: string;
-                params?: Record<string, unknown> | undefined;
-                preventDefault?: boolean | undefined;
-                confirm?: {
-                    title?: string | undefined;
-                    description?: string | undefined;
-                    confirmLabel?: string | undefined;
-                    cancelLabel?: string | undefined;
-                } | undefined;
-            }[]> | undefined;
         }>;
         state?: Record<string, unknown> | undefined;
     };

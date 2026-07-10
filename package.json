@@ -1,6 +1,6 @@
 {
   "name": "@useimpel/eve-kit",
-  "version": "0.2.50",
+  "version": "1.0.0",
   "description": "Eve helpers and AI SDK provider for Impel gateway-backed agents.",
   "type": "module",
   "repository": {
@@ -56,6 +56,10 @@
       "types": "./dist/eve/gateway.d.ts",
       "import": "./dist/eve/gateway.js"
     },
+    "./eve/cli-runner": {
+      "types": "./dist/eve/cli-runner.d.ts",
+      "import": "./dist/eve/cli-runner.js"
+    },
     "./eve/connections/claude-bridge": {
       "types": "./dist/eve/connections/claude-bridge.d.ts",
       "import": "./dist/eve/connections/claude-bridge.js"
@@ -100,33 +104,38 @@
   "files": [
     "dist",
     "src",
+    "scripts",
+    "fixtures/gateway-pilot-eve/package.json",
+    "fixtures/gateway-pilot-eve/tsconfig.json",
+    "fixtures/gateway-pilot-eve/agent",
+    "fixtures/gateway-pilot-eve/evals",
+    "MIGRATION.md",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "check": "npm run build && npm test",
+    "postbuild": "node --input-type=module -e \"import { chmodSync } from 'node:fs'; chmodSync('dist/bin/eve-kit-smoke-deployed.js', 0o755)\"",
+    "check": "npm run build && npm run typecheck:pilot:gateway:eve && npm test",
+    "pilot:gateway": "node scripts/pilot-gateway.mjs",
+    "pilot:gateway:eve": "cd fixtures/gateway-pilot-eve && eve eval gateway-pilot --strict --skip-report --max-concurrency 1",
+    "typecheck:pilot:gateway:eve": "tsc -p fixtures/gateway-pilot-eve/tsconfig.json",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@ai-sdk/xai": "^4.0.3",
-    "@ai-sdk/provider-utils": "5.0.0-beta.49",
-    "@openai/codex": "^0.143.0",
-    "@vercel/connect": "0.2.2",
-    "ai-sdk-provider-codex-cli": "1.2.2",
-    "ai": "7.0.0-beta.178",
+    "@ai-sdk/anthropic": "4.0.10",
+    "@ai-sdk/openai": "4.0.9",
+    "@ai-sdk/provider": "4.0.2",
+    "@ai-sdk/xai": "4.0.9",
+    "@vercel/connect": "0.3.2",
+    "ai": "7.0.18",
     "zod": "4.4.3"
   },
   "peerDependencies": {
-    "@ai-sdk/provider": "^4.0.0-beta.19",
-    "ai-sdk-provider-claude-code": "3.5.0",
-    "eve": "^0.11.6",
-    "just-bash": "3.0.1"
+    "eve": "0.22.1",
+    "just-bash": "3.1.0"
   },
   "peerDependenciesMeta": {
-    "ai-sdk-provider-claude-code": {
-      "optional": true
-    },
     "eve": {
       "optional": true
     },
@@ -135,14 +144,11 @@
     }
   },
   "devDependencies": {
-    "@ai-sdk/provider": "4.0.0-beta.19",
-    "@types/node": "^24.5.2",
-    "ai-sdk-provider-claude-code": "3.5.0",
-    "ai-sdk-provider-codex-cli": "1.2.2",
-    "braintrust": "^3.18.0",
-    "eve": "^0.11.6",
-    "just-bash": "3.0.1",
-    "typescript": "^5.6.0"
+    "@types/node": "26.1.1",
+    "braintrust": "3.21.0",
+    "eve": "0.22.1",
+    "just-bash": "3.1.0",
+    "typescript": "7.0.2"
   },
   "engines": {
     "node": ">=24"

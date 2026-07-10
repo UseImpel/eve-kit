@@ -35,8 +35,7 @@ export function createImpelSmokeEval({ defaultAgentId, defaultOrgId, defaultAgen
         metadata,
         async test(t) {
             await t.send(message);
-            t.didNotFail();
-            t.completed();
+            t.succeeded();
         },
     });
 }

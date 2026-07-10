@@ -55,7 +55,9 @@ export interface ImpelPlannedRepoCheckout {
 export interface ImpelEveChannelState {
     runContext: ImpelEveRunContext | null;
     workspaceAuth: {
-        runToken: string | null;
+        identityRunToken?: string | null;
+        /** @deprecated Read-only compatibility for serialized pre-v1 sessions. */
+        runToken?: string | null;
     };
     workspace: {
         prepared: boolean;
@@ -75,12 +77,26 @@ export interface PrepareImpelEveWorkspaceOptions {
     referenceRepos?: readonly string[];
     getSandbox: () => Promise<SandboxSession>;
 }
+export type ImpelIdentityResolveErrorCode = "http_error" | "invalid_assertion" | "invalid_response" | "unreachable";
+/** Safe, token-free failure from the centralized impel-identity resolver. */
+export declare class ImpelIdentityResolveError extends Error {
+    readonly code: ImpelIdentityResolveErrorCode;
+    readonly status?: number;
+    constructor(options: {
+        code: ImpelIdentityResolveErrorCode;
+        message: string;
+        status?: number;
+    });
+}
 export declare function defaultImpelEveChannel({ basicUser, basicPassword, includePlaceholderAuth, prepareAttachedRepos, checkoutDepth, trustedVercelSubjects, referenceRepos, }?: DefaultImpelEveChannelOptions): ImpelEveChannel;
 export declare function createImpelEveChannelState(runContext: ImpelEveRunContext | null, workspaceAuth?: {
+    identityRunToken?: string | null;
+    /** @deprecated Accepted only for serialized pre-v1 state. */
     runToken?: string | null;
 }): ImpelEveChannelState;
 export declare function extractImpelEveRunContextFromRequest(request: Request): Promise<ImpelEveRunContext | null>;
 export declare function readClientContextRunToken(value: unknown): string | null;
+export declare function readClientContextIdentityRunToken(value: unknown): string | null;
 export declare function normalizeImpelEveRunContext(value: unknown): ImpelEveRunContext | null;
 export declare function normalizeClientContextMessages(value: unknown): string[] | undefined;
 export declare function prepareImpelEveWorkspace(state: ImpelEveChannelState, options: PrepareImpelEveWorkspaceOptions): Promise<void>;

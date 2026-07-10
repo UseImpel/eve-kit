@@ -1,0 +1,18 @@
+{
+  "name": "eve-kit-gateway-pilot",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#*": "./agent/*",
+    "#evals/*": "./evals/*"
+  },
+  "dependencies": {
+    "ai": "7.0.18",
+    "eve": "0.22.1",
+    "zod": "4.4.3"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
