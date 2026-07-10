@@ -4,10 +4,12 @@ import {
   GET,
   POST,
   type Channel,
+  type HttpRouteDefinition,
   type RouteHandlerArgs,
   type SendOptions,
   type SendPayload,
 } from "eve/channels";
+import { eveChannel } from "eve/channels/eve";
 import {
   httpBasic,
   localDev,
@@ -648,6 +650,7 @@ async function prepareReferenceRepoAccess(
 
 function createImpelEveRoutes(auth: readonly AuthFn<Request>[]) {
   return [
+    createImpelEveInfoRoute(auth),
     POST<ImpelEveChannelState>("/eve/v1/session", async (request, args) => {
       const authorized = await routeAuth(request, auth);
       if (authorized instanceof Response) return authorized;
@@ -781,6 +784,29 @@ function createImpelEveRoutes(auth: readonly AuthFn<Request>[]) {
       },
     ),
   ];
+}
+
+function createImpelEveInfoRoute(
+  auth: readonly AuthFn<Request>[],
+): HttpRouteDefinition<ImpelEveChannelState> {
+  const route = eveChannel({ auth }).routes.find(
+    (candidate) =>
+      candidate.method === "GET" && candidate.path === "/eve/v1/info",
+  );
+  if (!route || route.transport === "websocket") {
+    throw new Error("Eve's standard agent info route is unavailable.");
+  }
+
+  // Reuse Eve's own authenticated info handler so its internal Nitro dispatch
+  // context and response schema stay version-aligned. The handler never sends
+  // a session, so adapting its stateless RouteHandlerArgs to this stateful
+  // channel is safe; the original runtime args object is passed through.
+  return GET<ImpelEveChannelState>("/eve/v1/info", (request, args) =>
+    route.handler(
+      request,
+      args as unknown as RouteHandlerArgs,
+    ),
+  );
 }
 
 type CreateSessionBody = {

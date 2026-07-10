@@ -1,5 +1,6 @@
 import { createSign } from "node:crypto";
 import { defineChannel, GET, POST, } from "eve/channels";
+import { eveChannel } from "eve/channels/eve";
 import { httpBasic, localDev, placeholderAuth, routeAuth, vercelOidc, } from "eve/channels/auth";
 /** Safe, token-free failure from the centralized impel-identity resolver. */
 export class ImpelIdentityResolveError extends Error {
@@ -393,6 +394,7 @@ async function prepareReferenceRepoAccess(state, runContext, referenceRepos, opt
 }
 function createImpelEveRoutes(auth) {
     return [
+        createImpelEveInfoRoute(auth),
         POST("/eve/v1/session", async (request, args) => {
             const authorized = await routeAuth(request, auth);
             if (authorized instanceof Response)
@@ -490,6 +492,17 @@ function createImpelEveRoutes(auth) {
             }
         }),
     ];
+}
+function createImpelEveInfoRoute(auth) {
+    const route = eveChannel({ auth }).routes.find((candidate) => candidate.method === "GET" && candidate.path === "/eve/v1/info");
+    if (!route || route.transport === "websocket") {
+        throw new Error("Eve's standard agent info route is unavailable.");
+    }
+    // Reuse Eve's own authenticated info handler so its internal Nitro dispatch
+    // context and response schema stay version-aligned. The handler never sends
+    // a session, so adapting its stateless RouteHandlerArgs to this stateful
+    // channel is safe; the original runtime args object is passed through.
+    return GET("/eve/v1/info", (request, args) => route.handler(request, args));
 }
 async function parseJsonBody(request) {
     let body;

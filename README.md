@@ -10,7 +10,7 @@ account and performs one Anthropic Messages or OpenAI Responses model turn.
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v1.0.0.tar.gz
+npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v1.0.1.tar.gz
 ```
 
 ## Eve usage
@@ -158,5 +158,10 @@ import { impelJustBashSandbox } from "@useimpel/eve-kit/eve/sandbox";
 import { renderUiTool } from "@useimpel/eve-kit/eve/render-ui";
 import { createImpelBraintrustEvalConfig } from "@useimpel/eve-kit/eve/evals";
 ```
+
+`defaultImpelEveChannel()` preserves Eve's authenticated
+`GET /eve/v1/info` inspection route alongside Impel's stateful session routes,
+so standard clients, evals, and deployment probes can discover agent
+capabilities without a parallel transport.
 
 See [MIGRATION.md](./MIGRATION.md) for the v1 cutover checklist.

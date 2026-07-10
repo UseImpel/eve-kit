@@ -113,9 +113,46 @@ test("preserves channel state and explicit trusted Vercel subjects", () => {
       "owner:impel-bb80950e:project:next:environment:production",
     ],
   });
-  assert.equal(channel.routes.length, 3);
+  assert.equal(channel.routes.length, 4);
+  assert.ok(
+    channel.routes.some(
+      (route) => route.method === "GET" && route.path === "/eve/v1/info",
+    ),
+  );
   assert.equal(channel.adapter.kind, "defineChannel");
   assert.deepEqual(channel.adapter.state, createImpelEveChannelState(null));
+});
+
+test("default Eve info route applies the configured auth policy", async () => {
+  const channel = defaultImpelEveChannel({
+    basicUser: "user",
+    basicPassword: "pass",
+  });
+  const route = channel.routes.find(
+    (candidate) =>
+      candidate.method === "GET" && candidate.path === "/eve/v1/info",
+  );
+  assert.ok(route);
+
+  const response = await route.handler(
+    new Request("https://agent.example/eve/v1/info"),
+    {
+      async send() {
+        throw new Error("not used");
+      },
+      getSession() {
+        throw new Error("not used");
+      },
+      params: {},
+      receive() {
+        throw new Error("not used");
+      },
+      requestIp: null,
+      waitUntil() {},
+    },
+  );
+
+  assert.equal(response.status, 401);
 });
 
 test("default Eve session route seeds channel state from clientContext", async () => {
