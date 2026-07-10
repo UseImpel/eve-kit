@@ -510,7 +510,7 @@ function stateFromPreparedWorkspaceMetadata(
 ): ImpelEveChannelState {
   return {
     runContext,
-    workspaceAuth: { runToken: null },
+    workspaceAuth: { identityRunToken: null },
     workspace: {
       prepared: true,
       sandboxId: sandbox.id,

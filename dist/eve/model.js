@@ -1,6 +1,48 @@
-import { claudeCode, } from "ai-sdk-provider-claude-code";
-import { impelGatewayClaudeModel, impelGatewayCodexModel, resolveImpelGatewayUrl, } from "./gateway-model.js";
-import { impelInference, } from "../index.js";
+import { impelGatewayModel, } from "../gateway-model.js";
+const ANTHROPIC_PROVIDER_OPTION_KEYS = new Set([
+    "sendReasoning",
+    "structuredOutputMode",
+    "thinking",
+    "disableParallelToolUse",
+    "cacheControl",
+    "metadata",
+    "mcpServers",
+    "container",
+    "toolStreaming",
+    "effort",
+    "taskBudget",
+    "speed",
+    "inferenceGeo",
+    "fallbacks",
+    "anthropicBeta",
+    "contextManagement",
+]);
+const OPENAI_PROVIDER_OPTION_KEYS = new Set([
+    "conversation",
+    "include",
+    "instructions",
+    "logprobs",
+    "maxToolCalls",
+    "metadata",
+    "parallelToolCalls",
+    "previousResponseId",
+    "promptCacheKey",
+    "promptCacheRetention",
+    "reasoningEffort",
+    "reasoningSummary",
+    "safetyIdentifier",
+    "serviceTier",
+    "store",
+    "passThroughUnsupportedFiles",
+    "strictJsonSchema",
+    "textVerbosity",
+    "truncation",
+    "user",
+    "systemMessageMode",
+    "forceReasoning",
+    "contextManagement",
+    "allowedTools",
+]);
 export const IMPEL_CLAUDE_CONTEXT_WINDOW_TOKENS = 200000;
 export const IMPEL_DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";
 export const IMPEL_CODEX_CONTEXT_WINDOW_TOKENS = 200000;
@@ -14,26 +56,8 @@ export function resolveImpelModelId(envNames, defaultModelId) {
     }
     return defaultModelId;
 }
-export function createImpelClaudeProviderOptions({ providerOptions, permissionMode = "bypassPermissions", allowDangerouslySkipPermissions = true, effort, cwd, } = {}) {
-    return {
-        permissionMode,
-        allowDangerouslySkipPermissions,
-        ...(effort ? { effort } : {}),
-        ...(providerOptions ?? {}),
-        ...(cwd ? { cwd } : {}),
-    };
-}
 export function resolveImpelClaudeModelId({ modelId, defaultModelId = IMPEL_DEFAULT_CLAUDE_MODEL_ID, } = {}) {
     return modelId ?? resolveImpelModelId(["IMPEL_MODEL_ID"], defaultModelId);
-}
-export function createImpelCodexProviderOptions({ providerOptions, approvalMode = "never", sandboxMode = "workspace-write", skipGitRepoCheck = true, effort, } = {}) {
-    return {
-        approvalMode,
-        sandboxMode,
-        skipGitRepoCheck,
-        ...(effort ? { effort } : {}),
-        ...(providerOptions ?? {}),
-    };
 }
 export function resolveImpelCodexModelId({ modelId, defaultModelId = IMPEL_DEFAULT_CODEX_MODEL_ID, } = {}) {
     return (modelId ?? resolveImpelModelId(["IMPEL_CODEX_MODEL_ID"], defaultModelId));
@@ -42,163 +66,72 @@ export function resolveImpelOpenAIResponsesModelId({ modelId, defaultModelId = I
     return (modelId ??
         resolveImpelModelId(["IMPEL_OPENAI_RESPONSES_MODEL_ID", "IMPEL_CODEX_MODEL_ID"], defaultModelId));
 }
-export function inferClaudeCodeLocalModel(modelId, fallback = "opus") {
-    if (/sonnet/i.test(modelId))
-        return "sonnet";
-    if (/haiku/i.test(modelId))
-        return "haiku";
-    return fallback;
+/** @deprecated Pass AI SDK providerOptions directly to createImpelClaudeModel. */
+export function createImpelClaudeProviderOptions({ providerOptions, effort, } = {}) {
+    return normalizeProviderOptions("anthropic", providerOptions, effort);
+}
+/** @deprecated Pass AI SDK providerOptions directly to createImpelCodexModel. */
+export function createImpelCodexProviderOptions({ providerOptions, effort, } = {}) {
+    return normalizeProviderOptions("openai", providerOptions, effort);
 }
 /**
- * Is this a deployed Vercel serverless runtime (as opposed to local dev)?
- *
- * We key off `VERCEL_ENV` rather than `VERCEL` on purpose. Vercel sets
- * `VERCEL_ENV` to exactly "production" | "preview" | "development":
- *   - "production" / "preview" -> a real, remote deployment. There is NO Claude
- *     Code CLI and NO Anthropic OAuth credential here, so the local `claudeCode`
- *     provider can never work — it only throws a cryptic `AI_LoadAPIKeyError`
- *     deep in the tool loop.
- *   - "development" -> `vercel dev` running on a developer's machine, where the
- *     Claude Code CLI IS available, so `claudeCode` is valid.
- *
- * `VERCEL` (==="1") is deliberately NOT used as the signal: it is also set by
- * `vercel dev` and during local builds, where claudeCode is valid. Treating
- * `VERCEL=1` as "deployed" would break local development — the exact thing we
- * must not do. Keying off production/preview only is the conservative choice:
- * the loud failure can only fire on a real remote deploy, never locally.
+ * Backward-compatible name for the default pure-Eve gateway model.
+ * No environment-dependent provider or local harness fallback remains.
  */
-function isDeployedServerlessRuntime() {
-    return (process.env.VERCEL_ENV === "production" ||
-        process.env.VERCEL_ENV === "preview");
-}
-function envBoolean(name) {
-    const value = process.env[name]?.trim().toLowerCase();
-    if (!value)
-        return undefined;
-    if (["1", "true", "yes", "on"].includes(value))
-        return true;
-    if (["0", "false", "no", "off"].includes(value))
-        return false;
-    return undefined;
-}
-function allowLocalProviderFallback(explicit) {
-    if (explicit !== undefined)
-        return explicit;
-    const env = envBoolean("IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK");
-    if (env !== undefined)
-        return env;
-    return process.env.NODE_ENV !== "production";
-}
 export function createImpelClaudeModel(options = {}) {
-    const { modelId: explicitModelId, defaultModelId, localModel, defaultLocalModel = "opus", providerOptions, localProviderOptions, permissionMode, allowDangerouslySkipPermissions, effort, cwd, allowLocalProviderFallback: explicitAllowLocalProviderFallback, gatewayUrl: explicitGatewayUrl, gatewayAuthToken: explicitGatewayAuthToken, gatewayPat: explicitGatewayPat, provider = "claude-code", ...inferenceOptions } = options;
-    const modelId = resolveImpelClaudeModelId({
-        modelId: explicitModelId,
-        defaultModelId,
-    });
-    const resolvedProviderOptions = createImpelClaudeProviderOptions({
-        providerOptions,
-        permissionMode,
-        allowDangerouslySkipPermissions,
-        effort,
-        cwd,
-    });
-    const gatewayUrl = resolveImpelGatewayUrl(explicitGatewayUrl);
-    if (gatewayUrl) {
-        return impelGatewayClaudeModel(modelId, {
-            gatewayUrl,
-            authToken: explicitGatewayAuthToken ??
-                explicitGatewayPat ??
-                process.env.IMPEL_GATEWAY_AUTH_TOKEN ??
-                process.env.IMPEL_GATEWAY_PAT,
-            providerOptions: resolvedProviderOptions,
-            localModel,
-            defaultLocalModel,
-            runContext: inferenceOptions.runContext,
-        });
-    }
-    if (inferenceOptions.baseUrl ?? process.env.IMPEL_INFERENCE_URL) {
-        return impelInference(modelId, {
-            ...inferenceOptions,
-            provider,
-            providerOptions: resolvedProviderOptions,
-        });
-    }
-    // The durable impel-inference proxy was not selected (no baseUrl and no
-    // IMPEL_INFERENCE_URL). The only remaining path is the local `claudeCode`
-    // provider, which depends on the Claude Code CLI + Anthropic OAuth credentials
-    // that exist ONLY in local development. In a deployed serverless runtime those
-    // are absent, so claudeCode throws a late, cryptic `AI_LoadAPIKeyError` deep in
-    // the tool loop (it surfaces as MODEL_CALL_FAILED / a chat stuck at "Starting
-    // runtime") — a missing-env misconfiguration that is painful to diagnose.
-    //
-    // Fail loud and early instead, but ONLY when we are certain we are in a
-    // deployed runtime (see isDeployedServerlessRuntime: production/preview only).
-    // Local dev — plain `node`/`tsx`/`eve dev` (no VERCEL_ENV) and `vercel dev`
-    // (VERCEL_ENV="development") — still falls through to claudeCode exactly as
-    // before. `IMPEL_ALLOW_CLAUDE_CODE_FALLBACK=1` is an explicit escape hatch to
-    // force the local provider even on a deploy.
-    if (isDeployedServerlessRuntime() &&
-        process.env.IMPEL_ALLOW_CLAUDE_CODE_FALLBACK !== "1") {
-        throw new Error("IMPEL_INFERENCE_URL is not set — this deployed agent cannot reach " +
-            "impel-gateway or impel-inference, and the local claude-code provider only works in local " +
-            "development (it requires the Claude Code CLI and Anthropic OAuth " +
-            "credentials, which do not exist in a Vercel serverless runtime). Set " +
-            "IMPEL_GATEWAY_URL on this deployment, or " +
-            "set IMPEL_ALLOW_CLAUDE_CODE_FALLBACK=1 to force the local provider.");
-    }
-    // Independent fallback gate (keyed on NODE_ENV / explicit option /
-    // IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK). This also covers non-Vercel production
-    // runtimes that isDeployedServerlessRuntime() cannot detect, and lets callers
-    // force-disable the local provider via `allowLocalProviderFallback: false`.
-    if (!allowLocalProviderFallback(explicitAllowLocalProviderFallback)) {
-        throw new Error("IMPEL_GATEWAY_URL, IMPEL_INFERENCE_URL, or baseUrl is required for createImpelClaudeModel in production. Set IMPEL_ALLOW_LOCAL_PROVIDER_FALLBACK=true only for explicit local development.");
-    }
-    return claudeCode(localModel ?? inferClaudeCodeLocalModel(modelId, defaultLocalModel), { ...resolvedProviderOptions, ...(localProviderOptions ?? {}) });
+    const modelId = resolveImpelClaudeModelId(options);
+    return impelGatewayModel(modelId, gatewayOptions(options, "anthropic"));
 }
+/** Backward-compatible OpenAI Responses/Codex gateway model factory. */
 export function createImpelCodexModel(options = {}) {
-    const { modelId: explicitModelId, defaultModelId, providerOptions, approvalMode, sandboxMode, skipGitRepoCheck, effort, gatewayUrl, gatewayAuthToken, gatewayPat, ...inferenceOptions } = options;
-    const modelId = resolveImpelCodexModelId({
-        modelId: explicitModelId,
-        defaultModelId,
-    });
-    const resolvedGatewayUrl = resolveImpelGatewayUrl(gatewayUrl);
-    if (resolvedGatewayUrl) {
-        return impelGatewayCodexModel(modelId, {
-            gatewayUrl: resolvedGatewayUrl,
-            authToken: gatewayAuthToken ??
-                gatewayPat ??
-                process.env.IMPEL_GATEWAY_AUTH_TOKEN ??
-                process.env.IMPEL_GATEWAY_PAT,
-            providerOptions: createImpelCodexProviderOptions({
-                providerOptions,
-                approvalMode,
-                sandboxMode,
-                skipGitRepoCheck,
-                effort,
-            }),
-            runContext: inferenceOptions.runContext,
-        });
-    }
-    return impelInference(modelId, {
-        ...inferenceOptions,
-        provider: "codex-app-server",
-        providerOptions: createImpelCodexProviderOptions({
-            providerOptions,
-            approvalMode,
-            sandboxMode,
-            skipGitRepoCheck,
-            effort,
-        }),
-    });
+    const modelId = resolveImpelCodexModelId(options);
+    return impelGatewayModel(modelId, gatewayOptions(options, "openai"));
 }
 export function createImpelOpenAIResponsesModel(options = {}) {
     return createImpelCodexModel({
         ...options,
-        defaultModelId: options.defaultModelId ?? IMPEL_DEFAULT_OPENAI_RESPONSES_MODEL_ID,
-        modelId: resolveImpelOpenAIResponsesModelId({
-            modelId: options.modelId,
-            defaultModelId: options.defaultModelId ?? IMPEL_DEFAULT_OPENAI_RESPONSES_MODEL_ID,
-        }),
+        modelId: resolveImpelOpenAIResponsesModelId(options),
     });
+}
+function gatewayOptions(options, provider) {
+    return {
+        gatewayUrl: options.gatewayUrl,
+        authToken: options.authToken ?? options.gatewayAuthToken ?? options.gatewayPat,
+        headers: options.headers,
+        runContext: options.runContext,
+        fetch: options.fetch,
+        providerOptions: normalizeProviderOptions(provider, options.providerOptions, options.effort),
+    };
+}
+function normalizeProviderOptions(provider, options, effort) {
+    const source = options ?? {};
+    const aliases = provider === "anthropic"
+        ? ["anthropic", "claude", "claude_code", "claude-code"]
+        : ["openai", "codex", "codex_cli", "codex-app-server"];
+    const allowedKeys = provider === "anthropic"
+        ? ANTHROPIC_PROVIDER_OPTION_KEYS
+        : OPENAI_PROVIDER_OPTION_KEYS;
+    const providerOptions = {
+        ...(effort
+            ? provider === "anthropic"
+                ? { effort }
+                : { reasoningEffort: effort }
+            : {}),
+    };
+    for (const alias of aliases) {
+        const scoped = source[alias];
+        if (isJsonObject(scoped))
+            Object.assign(providerOptions, scoped);
+    }
+    for (const [key, value] of Object.entries(source)) {
+        if (allowedKeys.has(key))
+            providerOptions[key] = value;
+    }
+    return Object.keys(providerOptions).length
+        ? { [provider]: providerOptions }
+        : {};
+}
+function isJsonObject(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 //# sourceMappingURL=model.js.map

@@ -302,7 +302,7 @@ function plannedReposFromPreparedWorkspaceMetadata(metadata) {
 function stateFromPreparedWorkspaceMetadata(sandbox, runContext, metadata) {
     return {
         runContext,
-        workspaceAuth: { runToken: null },
+        workspaceAuth: { identityRunToken: null },
         workspace: {
             prepared: true,
             sandboxId: sandbox.id,

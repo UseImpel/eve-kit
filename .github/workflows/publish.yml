@@ -42,30 +42,46 @@ jobs:
         with:
           node-version: 24
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build & test
-        run: npm run check
-
-      - name: Verify committed dist/ matches a fresh build
-        # Consumers install the tag tarball verbatim, so a stale committed dist/
-        # would ship stale code to everyone. `npm run check` just rebuilt dist/;
-        # warn loudly (non-blocking) if that changed anything under dist/.
-        run: |
-          if git diff --quiet -- dist; then
-            echo "dist/ is in sync with source for this tag."
-          else
-            echo "::warning title=dist drift::Committed dist/ does not match a fresh build for this tag. Rebuild (npm run build), commit dist/, and re-tag — consumers install the tarball as-is."
-            git diff --stat -- dist || true
-          fi
-
-      - name: Resolve release metadata
+      - name: Resolve and verify release metadata
         id: meta
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="$(node -p "require('./package.json').version")"
+          EXPECTED_TAG="v$VERSION"
+          if [ "$TAG" != "$EXPECTED_TAG" ]; then
+            echo "::error title=tag/version mismatch::Resolved release tag '$TAG' must exactly match package.json version '$EXPECTED_TAG'."
+            exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build & test from a clean dist/
+        # Rebuilding from an empty directory catches stale committed modules
+        # whose source was removed as well as newly generated outputs.
+        run: |
+          rm -rf dist
+          npm run check
+          chmod +x dist/bin/eve-kit-smoke-deployed.js
+
+      - name: Verify committed dist/ matches a fresh build
+        # Consumers install the tag tarball verbatim, so a stale committed dist/
+        # would ship stale code to everyone. `npm run check` just rebuilt dist/
+        # from empty; tracked changes, deletions, and untracked outputs must all
+        # block release creation.
+        run: |
+          DIST_STATUS="$(git status --porcelain --untracked-files=all -- dist)"
+          if [ -z "$DIST_STATUS" ]; then
+            echo "dist/ is in sync with source for this tag."
+          else
+            echo "::error title=dist drift::Committed dist/ does not match a fresh build for this tag. Rebuild (npm run build), commit dist/, and re-tag — consumers install the tarball as-is."
+            echo "$DIST_STATUS"
+            git diff --stat -- dist
+            git diff -- dist
+            exit 1
+          fi
 
       - name: Create GitHub Release (idempotent)
         id: release
