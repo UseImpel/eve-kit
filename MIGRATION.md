@@ -7,7 +7,7 @@ loop on the default path.
 ## Agent changes
 
 1. Pin `@useimpel/eve-kit` to the repository's GitHub tag tarball:
-   `https://github.com/UseImpel/eve-kit/archive/refs/tags/v1.0.2.tar.gz`.
+   `https://github.com/UseImpel/eve-kit/archive/refs/tags/v1.0.3.tar.gz`.
    This repository's current release convention is GitHub tag tarballs, not the
    npm registry.
 2. Set `IMPEL_GATEWAY_URL` and provide the signed per-run token as

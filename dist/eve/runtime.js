@@ -155,7 +155,7 @@ function handleSmokeEvent(line) {
             throw new ImpelRuntimeSmokeError(`stream ended with non-success finishReason=${reason}`);
         }
     }
-    if (/truncat/i.test(line)) {
+    if (hasTrueTruncationMarker(event)) {
         throw new ImpelRuntimeSmokeError(`stream contained truncation marker: ${redactForLog(line).slice(0, 1000)}`);
     }
     const data = event &&
@@ -204,6 +204,14 @@ function finishReasons(value, reasons = []) {
         }
     }
     return reasons;
+}
+function hasTrueTruncationMarker(value) {
+    if (value === null || typeof value !== "object")
+        return false;
+    if (Array.isArray(value))
+        return value.some(hasTrueTruncationMarker);
+    return Object.entries(value).some(([key, item]) => (key === "truncated" && item === true) ||
+        hasTrueTruncationMarker(item));
 }
 function containsUnredactedSecret(value) {
     return (/x-access-token:[^@\s]+@/i.test(value) ||
