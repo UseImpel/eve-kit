@@ -1,6 +1,6 @@
 import { defineAgent } from "eve";
 
-import { impelGatewayModel } from "../../../dist/index.js";
+import { impelGatewayModel } from "../vendor/eve-kit/index.js";
 
 export default defineAgent({
   model: impelGatewayModel(

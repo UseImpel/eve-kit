@@ -4,3 +4,7 @@ npm-debug.log*
 .DS_Store
 .impel/
 README_IMPEL_WORKSPACE.md
+fixtures/gateway-pilot-eve/vendor/
+fixtures/gateway-pilot-eve/.eve/
+fixtures/gateway-pilot-eve/.output/
+fixtures/gateway-pilot-eve/.vercel/

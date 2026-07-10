@@ -1,6 +1,6 @@
 {
   "name": "@useimpel/eve-kit",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Eve helpers and AI SDK provider for Impel gateway-backed agents.",
   "type": "module",
   "repository": {
@@ -118,8 +118,9 @@
     "postbuild": "node --input-type=module -e \"import { chmodSync } from 'node:fs'; chmodSync('dist/bin/eve-kit-smoke-deployed.js', 0o755)\"",
     "check": "npm run build && npm run typecheck:pilot:gateway:eve && npm test",
     "pilot:gateway": "node scripts/pilot-gateway.mjs",
-    "pilot:gateway:eve": "cd fixtures/gateway-pilot-eve && eve eval gateway-pilot --strict --skip-report --max-concurrency 1",
-    "typecheck:pilot:gateway:eve": "tsc -p fixtures/gateway-pilot-eve/tsconfig.json",
+    "pilot:gateway:eve": "npm run prepare:pilot:gateway:eve && cd fixtures/gateway-pilot-eve && eve eval gateway-pilot --strict --skip-report --max-concurrency 1",
+    "prepare:pilot:gateway:eve": "node scripts/prepare-pilot-gateway-eve.mjs",
+    "typecheck:pilot:gateway:eve": "npm run prepare:pilot:gateway:eve && tsc -p fixtures/gateway-pilot-eve/tsconfig.json",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
