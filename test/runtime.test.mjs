@@ -70,3 +70,97 @@ test("step completion at a waiting boundary is not a completed turn", async () =
   assert.equal(result.completed, false);
   assert.equal(result.eventCount, 3);
 });
+
+test("completed read_file output with truncated false passes", async () => {
+  const result = await smokeDeployedRuntime({
+    baseUrl: "https://agent.example",
+    timeoutMs: 1_000,
+    fetch: runtimeFetch(
+      [
+        {
+          type: "action.result",
+          data: {
+            result: {
+              callId: "read-file-1",
+              kind: "tool-result",
+              output: {
+                content: "DEPLOYMENT_SMOKE_OK",
+                path: "/workspace/DEPLOYMENT_SMOKE.txt",
+                totalLines: 1,
+                truncated: false,
+              },
+              toolName: "read_file",
+            },
+            sequence: 1,
+            status: "completed",
+            stepIndex: 0,
+            turnId: "turn-1",
+          },
+        },
+        { type: "turn.completed" },
+        { type: "session.waiting" },
+      ],
+      () => {},
+    ),
+  });
+
+  assert.equal(result.completed, true);
+  assert.equal(result.eventCount, 3);
+});
+
+test("ordinary assistant text mentioning truncation passes", async () => {
+  const result = await smokeDeployedRuntime({
+    baseUrl: "https://agent.example",
+    timeoutMs: 1_000,
+    fetch: runtimeFetch(
+      [
+        {
+          type: "message.completed",
+          data: {
+            finishReason: "stop",
+            messageSoFar: "The file was not truncated.",
+          },
+        },
+        { type: "turn.completed" },
+        { type: "session.waiting" },
+      ],
+      () => {},
+    ),
+  });
+
+  assert.equal(result.completed, true);
+  assert.equal(result.textBytes, 27);
+});
+
+test("true truncated metadata fails", async () => {
+  await assert.rejects(
+    smokeDeployedRuntime({
+      baseUrl: "https://agent.example",
+      timeoutMs: 1_000,
+      fetch: runtimeFetch(
+        [
+          {
+            type: "action.result",
+            data: { result: { output: { truncated: true } } },
+          },
+        ],
+        () => {},
+      ),
+    }),
+    /stream contained truncation marker/,
+  );
+});
+
+test("length finish reason fails", async () => {
+  await assert.rejects(
+    smokeDeployedRuntime({
+      baseUrl: "https://agent.example",
+      timeoutMs: 1_000,
+      fetch: runtimeFetch(
+        [{ type: "message.completed", data: { finishReason: "length" } }],
+        () => {},
+      ),
+    }),
+    /non-success finishReason=length/,
+  );
+});

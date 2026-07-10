@@ -228,7 +228,7 @@ function handleSmokeEvent(line: string): {
       );
     }
   }
-  if (/truncat/i.test(line)) {
+  if (hasTrueTruncationMarker(event)) {
     throw new ImpelRuntimeSmokeError(
       `stream contained truncation marker: ${redactForLog(line).slice(0, 1000)}`,
     );
@@ -280,6 +280,16 @@ function finishReasons(value: unknown, reasons: string[] = []): string[] {
     }
   }
   return reasons;
+}
+
+function hasTrueTruncationMarker(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(hasTrueTruncationMarker);
+  return Object.entries(value).some(
+    ([key, item]) =>
+      (key === "truncated" && item === true) ||
+      hasTrueTruncationMarker(item),
+  );
 }
 
 function containsUnredactedSecret(value: string): boolean {
