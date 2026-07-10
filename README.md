@@ -10,7 +10,7 @@ account and performs one Anthropic Messages or OpenAI Responses model turn.
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v1.0.1.tar.gz
+npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v1.0.2.tar.gz
 ```
 
 ## Eve usage

@@ -79,7 +79,7 @@ export async function smokeDeployedRuntime({ baseUrl, message = "Reply briefly: 
         }
         const decoder = new TextDecoder();
         let buffer = "";
-        for (;;) {
+        stream: for (;;) {
             const { done, value } = await reader.read();
             if (done)
                 break;
@@ -93,6 +93,10 @@ export async function smokeDeployedRuntime({ baseUrl, message = "Reply briefly: 
                 eventCount += 1;
                 completed ||= event.completed;
                 textBytes += event.textBytes;
+                if (event.boundary) {
+                    await reader.cancel();
+                    break stream;
+                }
             }
             if (successOnText && textBytes > 0) {
                 sawEnoughText = true;
@@ -135,7 +139,7 @@ function handleSmokeEvent(line) {
         event = JSON.parse(line);
     }
     catch {
-        return { completed: false, textBytes: 0 };
+        return { boundary: false, completed: false, textBytes: 0 };
     }
     const type = event && typeof event === "object" && "type" in event
         ? String(event.type)
@@ -173,7 +177,8 @@ function handleSmokeEvent(line) {
             textBytes += Buffer.byteLength(value);
     }
     return {
-        completed: /completed|finished|done/i.test(type),
+        boundary: /^session\.(?:waiting|completed)$/i.test(type),
+        completed: /^(?:turn|session)\.completed$/i.test(type),
         textBytes,
     };
 }
