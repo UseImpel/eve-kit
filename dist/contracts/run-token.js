@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 export const RUN_TOKEN_V2_VERSION = "v2";
 export const RUN_TOKEN_V2_ISSUER = "urn:useimpel:next";
+export const RUN_TOKEN_V2_RELEASE_ISSUER_PREFIX = "urn:useimpel:release-ci:";
 export const RUN_TOKEN_V2_AUDIENCE = "urn:useimpel:gateway:inference";
 export const RUN_TOKEN_V2_MAX_LIFETIME_SECONDS = 4_500;
 export const RUN_TOKEN_V2_CLOCK_SKEW_SECONDS = 60;
@@ -81,7 +82,26 @@ export function verifyRunToken(token, secret, now = Math.floor(Date.now() / 1000
  * iss, aud, orgId, runId, optional attribution, iat, exp, scopes.
  */
 export function signRunTokenV2(payload, secret) {
-    const normalized = normalizeRunTokenV2Payload(payload);
+    const normalized = normalizeRunTokenV2Payload(payload, RUN_TOKEN_V2_ISSUER);
+    return signNormalizedRunTokenV2(normalized, normalizeRunTokenV2Secret(secret));
+}
+/**
+ * Signs a release-CI capability without broadening the trusted platform signer.
+ * The gateway remains authoritative for the configured issuer/org/agent map.
+ */
+export function signReleaseGatewayRunToken(payload, secret) {
+    if (!isPlainRecord(payload) || !canonicalReleaseIssuer(payload.iss)) {
+        throwRunTokenError("invalid_payload", "Release run token issuer is invalid.");
+    }
+    if (!canonicalOrgId(payload.agentId) ||
+        "impelUserId" in payload ||
+        "liveblocksUserId" in payload) {
+        throwRunTokenError("invalid_payload", "Release run token requires one canonical agent and no user identity.");
+    }
+    const normalized = normalizeRunTokenV2Payload(payload, payload.iss);
+    return signNormalizedRunTokenV2(normalized, normalizeReleaseSignerSecret(secret));
+}
+function signNormalizedRunTokenV2(normalized, normalizedSecret) {
     const payloadPart = base64UrlEncode(JSON.stringify({
         iss: normalized.iss,
         aud: normalized.aud,
@@ -99,7 +119,7 @@ export function signRunTokenV2(payload, secret) {
         scopes: normalized.scopes,
     }));
     const signingInput = `${RUN_TOKEN_V2_VERSION}.${payloadPart}`;
-    const signaturePart = base64UrlEncode(hmacSha256(signingInput, normalizeRunTokenV2Secret(secret)));
+    const signaturePart = base64UrlEncode(hmacSha256(signingInput, normalizedSecret));
     return `${signingInput}.${signaturePart}`;
 }
 export function verifyRunTokenV2(token, secret, now = Math.floor(Date.now() / 1000)) {
@@ -158,11 +178,11 @@ function normalizeRunTokenPayload(payload) {
         exp,
     };
 }
-function normalizeRunTokenV2Payload(payload) {
+function normalizeRunTokenV2Payload(payload, expectedIssuer) {
     if (!isPlainRecord(payload) || !hasOnlyRunTokenV2Keys(payload)) {
         throwRunTokenError("invalid_payload", "Run token payload must be an object.");
     }
-    if (payload.iss !== RUN_TOKEN_V2_ISSUER) {
+    if (payload.iss !== expectedIssuer) {
         throwRunTokenError("invalid_payload", "Run token issuer is invalid.");
     }
     if (payload.aud !== RUN_TOKEN_V2_AUDIENCE) {
@@ -198,7 +218,7 @@ function normalizeRunTokenV2Payload(payload) {
         throwRunTokenError("invalid_payload", "Run token requires exactly one recognized inference scope.");
     }
     return {
-        iss: RUN_TOKEN_V2_ISSUER,
+        iss: expectedIssuer,
         aud: RUN_TOKEN_V2_AUDIENCE,
         orgId,
         runId,
@@ -224,7 +244,7 @@ function parseRunTokenV2Payload(payloadPart) {
     try {
         const rawPayload = base64UrlDecode(payloadPart, "invalid_payload").toString("utf8");
         validateRunTokenV2RawPayload(rawPayload);
-        return normalizeRunTokenV2Payload(JSON.parse(rawPayload));
+        return normalizeRunTokenV2Payload(JSON.parse(rawPayload), RUN_TOKEN_V2_ISSUER);
     }
     catch (error) {
         if (error instanceof RunTokenError)
@@ -452,6 +472,13 @@ function canonicalOrgId(value) {
         value.length <= 128 &&
         /^[A-Za-z0-9_.-]+$/.test(value));
 }
+function canonicalReleaseIssuer(value) {
+    if (typeof value !== "string" ||
+        !value.startsWith(RUN_TOKEN_V2_RELEASE_ISSUER_PREFIX)) {
+        return false;
+    }
+    return canonicalOrgId(value.slice(RUN_TOKEN_V2_RELEASE_ISSUER_PREFIX.length));
+}
 function canonicalRunId(value) {
     return (typeof value === "string" &&
         value.length >= 1 &&
@@ -477,6 +504,27 @@ function normalizeRunTokenV2Secret(secret) {
     const normalized = typeof secret === "string" ? secret.trim() : "";
     assertSecret(normalized);
     return normalized;
+}
+function normalizeReleaseSignerSecret(secret) {
+    if (typeof secret !== "string") {
+        throwRunTokenError("invalid_secret", "Release signer secret is invalid.");
+    }
+    const bytes = Buffer.byteLength(secret, "utf8");
+    if (bytes < 32 ||
+        bytes > 512 ||
+        secret !== trimGoSpace(secret)) {
+        throwRunTokenError("invalid_secret", "Release signer secret is invalid.");
+    }
+    for (const char of secret) {
+        const code = char.codePointAt(0) ?? 0;
+        if (code < 0x20 || code === 0x7f) {
+            throwRunTokenError("invalid_secret", "Release signer secret is invalid.");
+        }
+    }
+    return secret;
+}
+function trimGoSpace(value) {
+    return value.replace(/^[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/gu, "");
 }
 function readNonEmptyString(value) {
     return typeof value === "string" && value.length > 0 ? value : undefined;
