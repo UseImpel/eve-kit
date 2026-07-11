@@ -336,6 +336,7 @@ test("release-CI signer is explicit, scoped, and cannot assert a user", () => {
     "short",
     ` ${releaseSecret}`,
     `${releaseSecret}\u0000`,
+    `${"\t".repeat(400)}${releaseSecret}`,
     "x".repeat(513),
   ]) {
     assertRunTokenError(
