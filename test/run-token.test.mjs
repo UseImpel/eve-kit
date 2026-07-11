@@ -6,8 +6,10 @@ import {
   RUN_TOKEN_V2_AUDIENCE,
   RUN_TOKEN_V2_ISSUER,
   RUN_TOKEN_V2_MAX_LIFETIME_SECONDS,
+  RUN_TOKEN_V2_RELEASE_ISSUER_PREFIX,
   RunTokenError,
   signGatewayRunToken,
+  signReleaseGatewayRunToken,
   signRunToken,
   signRunTokenV2,
   verifyRunToken,
@@ -271,6 +273,83 @@ test("v2 canonical aliases and claim validation match the gateway verifier", () 
         unknownFieldToken,
         V2_VECTOR_SECRET,
         2_000_000_001,
+      ),
+    "invalid_payload",
+  );
+});
+
+test("release-CI signer is explicit, scoped, and cannot assert a user", () => {
+  const releaseIssuer =
+    `${RUN_TOKEN_V2_RELEASE_ISSUER_PREFIX}3screenscapital-impel-agents`;
+  const releaseSecret =
+    "release-signing-secret-0123456789abcdef0123456789abcdef";
+  const basePayload = {
+    iss: releaseIssuer,
+    aud: RUN_TOKEN_V2_AUDIENCE,
+    orgId: "3screenscapital",
+    runId: "release-run-1",
+    agentId: "quant",
+    iat: 2_000_000_000,
+    exp: 2_000_000_600,
+    scopes: ["codex-gateway"],
+  };
+  const token = signReleaseGatewayRunToken(basePayload, releaseSecret);
+  const [version, payloadPart, signature] = token.split(".");
+  const payload = JSON.parse(Buffer.from(payloadPart, "base64url").toString());
+  const expectedSignature = createHmac("sha256", releaseSecret)
+    .update(`${version}.${payloadPart}`)
+    .digest("base64url");
+
+  assert.equal(version, "v2");
+  assert.equal(signature, expectedSignature);
+  assert.deepEqual(payload, basePayload);
+
+  const bomSecret = `\ufeff${releaseSecret}\ufeff`;
+  const bomToken = signReleaseGatewayRunToken(basePayload, bomSecret);
+  const [bomVersion, bomPayloadPart, bomSignature] = bomToken.split(".");
+  assert.equal(
+    bomSignature,
+    createHmac("sha256", bomSecret)
+      .update(`${bomVersion}.${bomPayloadPart}`)
+      .digest("base64url"),
+  );
+
+  for (const patch of [
+    { iss: RUN_TOKEN_V2_ISSUER },
+    { iss: `${RUN_TOKEN_V2_RELEASE_ISSUER_PREFIX}bad/issuer` },
+    { agentId: "" },
+    { agentId: "other/agent" },
+    { impelUserId: "user-1" },
+    { liveblocksUserId: "lb-user-1" },
+  ]) {
+    assertRunTokenError(
+      () =>
+        signReleaseGatewayRunToken(
+          { ...basePayload, ...patch },
+          releaseSecret,
+        ),
+      "invalid_payload",
+    );
+  }
+
+  for (const invalidSecret of [
+    "short",
+    ` ${releaseSecret}`,
+    `${releaseSecret}\u0000`,
+    `${"\t".repeat(400)}${releaseSecret}`,
+    "x".repeat(513),
+  ]) {
+    assertRunTokenError(
+      () => signReleaseGatewayRunToken(basePayload, invalidSecret),
+      "invalid_secret",
+    );
+  }
+
+  assertRunTokenError(
+    () =>
+      signGatewayRunToken(
+        { ...V2_VECTOR_PAYLOAD, iss: releaseIssuer },
+        releaseSecret,
       ),
     "invalid_payload",
   );

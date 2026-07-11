@@ -22,6 +22,8 @@ export interface VerifiedRunToken {
 
 export const RUN_TOKEN_V2_VERSION = "v2";
 export const RUN_TOKEN_V2_ISSUER = "urn:useimpel:next";
+export const RUN_TOKEN_V2_RELEASE_ISSUER_PREFIX =
+  "urn:useimpel:release-ci:";
 export const RUN_TOKEN_V2_AUDIENCE = "urn:useimpel:gateway:inference";
 export const RUN_TOKEN_V2_MAX_LIFETIME_SECONDS = 4_500;
 export const RUN_TOKEN_V2_CLOCK_SKEW_SECONDS = 60;
@@ -32,6 +34,8 @@ export const RUN_TOKEN_V2_SCOPES = [
 ] as const;
 
 export type RunTokenV2Scope = (typeof RUN_TOKEN_V2_SCOPES)[number];
+export type RunTokenV2ReleaseIssuer =
+  `${typeof RUN_TOKEN_V2_RELEASE_ISSUER_PREFIX}${string}`;
 
 /**
  * Capability-scoped hosted inference token claims.
@@ -52,6 +56,23 @@ export interface RunTokenV2Payload {
   /** Expiration time as Unix epoch seconds. */
   exp: number;
   /** Exactly one provider capability is required. */
+  scopes: readonly [RunTokenV2Scope];
+}
+
+/**
+ * Release-CI form of the hosted inference capability.
+ *
+ * The gateway binds this issuer and its distinct secret to one exact org and
+ * agent allowlist. Release callers cannot assert end-user identity.
+ */
+export interface ReleaseRunTokenV2Payload {
+  iss: RunTokenV2ReleaseIssuer;
+  aud: typeof RUN_TOKEN_V2_AUDIENCE;
+  orgId: string;
+  runId: string;
+  agentId: string;
+  iat: number;
+  exp: number;
   scopes: readonly [RunTokenV2Scope];
 }
 
@@ -167,7 +188,51 @@ export function signRunTokenV2(
   payload: RunTokenV2Payload,
   secret: string,
 ): string {
-  const normalized = normalizeRunTokenV2Payload(payload);
+  const normalized = normalizeRunTokenV2Payload(
+    payload,
+    RUN_TOKEN_V2_ISSUER,
+  );
+  return signNormalizedRunTokenV2(
+    normalized,
+    normalizeRunTokenV2Secret(secret),
+  );
+}
+
+/**
+ * Signs a release-CI capability without broadening the trusted platform signer.
+ * The gateway remains authoritative for the configured issuer/org/agent map.
+ */
+export function signReleaseGatewayRunToken(
+  payload: ReleaseRunTokenV2Payload,
+  secret: string,
+): string {
+  if (!isPlainRecord(payload) || !canonicalReleaseIssuer(payload.iss)) {
+    throwRunTokenError(
+      "invalid_payload",
+      "Release run token issuer is invalid.",
+    );
+  }
+  if (
+    !canonicalOrgId(payload.agentId) ||
+    "impelUserId" in payload ||
+    "liveblocksUserId" in payload
+  ) {
+    throwRunTokenError(
+      "invalid_payload",
+      "Release run token requires one canonical agent and no user identity.",
+    );
+  }
+  const normalized = normalizeRunTokenV2Payload(payload, payload.iss);
+  return signNormalizedRunTokenV2(
+    normalized,
+    normalizeReleaseSignerSecret(secret),
+  );
+}
+
+function signNormalizedRunTokenV2(
+  normalized: NormalizedRunTokenV2,
+  normalizedSecret: string,
+): string {
   const payloadPart = base64UrlEncode(
     JSON.stringify({
       iss: normalized.iss,
@@ -188,7 +253,7 @@ export function signRunTokenV2(
   );
   const signingInput = `${RUN_TOKEN_V2_VERSION}.${payloadPart}`;
   const signaturePart = base64UrlEncode(
-    hmacSha256(signingInput, normalizeRunTokenV2Secret(secret)),
+    hmacSha256(signingInput, normalizedSecret),
   );
   return `${signingInput}.${signaturePart}`;
 }
@@ -272,12 +337,13 @@ function normalizeRunTokenPayload(payload: RunTokenPayload): RunTokenPayload {
 }
 
 function normalizeRunTokenV2Payload(
-  payload: RunTokenV2Payload,
-): VerifiedRunTokenV2 {
+  payload: RunTokenV2Payload | ReleaseRunTokenV2Payload,
+  expectedIssuer: string,
+): NormalizedRunTokenV2 {
   if (!isPlainRecord(payload) || !hasOnlyRunTokenV2Keys(payload)) {
     throwRunTokenError("invalid_payload", "Run token payload must be an object.");
   }
-  if (payload.iss !== RUN_TOKEN_V2_ISSUER) {
+  if (payload.iss !== expectedIssuer) {
     throwRunTokenError("invalid_payload", "Run token issuer is invalid.");
   }
   if (payload.aud !== RUN_TOKEN_V2_AUDIENCE) {
@@ -330,7 +396,7 @@ function normalizeRunTokenV2Payload(
   }
 
   return {
-    iss: RUN_TOKEN_V2_ISSUER,
+    iss: expectedIssuer,
     aud: RUN_TOKEN_V2_AUDIENCE,
     orgId,
     runId,
@@ -363,7 +429,8 @@ function parseRunTokenV2Payload(payloadPart: string): VerifiedRunTokenV2 {
     validateRunTokenV2RawPayload(rawPayload);
     return normalizeRunTokenV2Payload(
       JSON.parse(rawPayload),
-    );
+      RUN_TOKEN_V2_ISSUER,
+    ) as VerifiedRunTokenV2;
   } catch (error) {
     if (error instanceof RunTokenError) throw error;
     throwRunTokenError("invalid_payload", "Run token payload is invalid JSON.");
@@ -616,6 +683,18 @@ function canonicalOrgId(value: unknown): value is string {
   );
 }
 
+function canonicalReleaseIssuer(
+  value: unknown,
+): value is RunTokenV2ReleaseIssuer {
+  if (
+    typeof value !== "string" ||
+    !value.startsWith(RUN_TOKEN_V2_RELEASE_ISSUER_PREFIX)
+  ) {
+    return false;
+  }
+  return canonicalOrgId(value.slice(RUN_TOKEN_V2_RELEASE_ISSUER_PREFIX.length));
+}
+
 function canonicalRunId(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -647,6 +726,51 @@ function normalizeRunTokenV2Secret(secret: string): string {
   return normalized;
 }
 
+function normalizeReleaseSignerSecret(secret: string): string {
+  if (typeof secret !== "string") {
+    throwRunTokenError("invalid_secret", "Release signer secret is invalid.");
+  }
+  const bytes = Buffer.byteLength(secret, "utf8");
+  if (
+    bytes < 32 ||
+    bytes > 512 ||
+    secret !== trimGoSpace(secret)
+  ) {
+    throwRunTokenError("invalid_secret", "Release signer secret is invalid.");
+  }
+  for (const char of secret) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f) {
+      throwRunTokenError("invalid_secret", "Release signer secret is invalid.");
+    }
+  }
+  return secret;
+}
+
+function trimGoSpace(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && isGoSpace(value.charCodeAt(start))) start += 1;
+  while (end > start && isGoSpace(value.charCodeAt(end - 1))) end -= 1;
+  return value.slice(start, end);
+}
+
+function isGoSpace(code: number): boolean {
+  return (
+    (code >= 0x09 && code <= 0x0d) ||
+    code === 0x20 ||
+    code === 0x85 ||
+    code === 0xa0 ||
+    code === 0x1680 ||
+    (code >= 0x2000 && code <= 0x200a) ||
+    code === 0x2028 ||
+    code === 0x2029 ||
+    code === 0x202f ||
+    code === 0x205f ||
+    code === 0x3000
+  );
+}
+
 function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
@@ -658,6 +782,10 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return isRecord(value) && !Array.isArray(value);
 }
+
+type NormalizedRunTokenV2 = Omit<VerifiedRunTokenV2, "iss"> & {
+  iss: string;
+};
 
 function throwRunTokenError(
   code: RunTokenErrorCode,

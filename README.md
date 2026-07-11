@@ -10,7 +10,7 @@ account and performs one Anthropic Messages or OpenAI Responses model turn.
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v1.0.3.tar.gz
+npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v1.0.4.tar.gz
 ```
 
 ## Eve usage
@@ -104,6 +104,13 @@ present, identity HTTP, network, or empty-response failures fail closed instead
 of falling through to static, Vercel Connect, or GitHub App credentials. Keep
 both tokens on the Next → Eve → gateway/identity server path; never expose them
 to browser clients.
+
+Release workflows use `signReleaseGatewayRunToken()` with a dedicated
+`urn:useimpel:release-ci:<registry>` issuer and repository secret. This API
+requires an exact canonical agent ID, forbids user claims, and does not broaden
+`signGatewayRunToken()`, which remains pinned to `urn:useimpel:next`. The
+gateway and identity keyrings remain authoritative for each issuer's exact org
+and agent allowlist.
 
 ## Pool errors
 
