@@ -53,6 +53,7 @@ export interface ImpelEveRunContext {
   traceId?: string;
   agent?: Record<string, unknown>;
   btParent?: string;
+  codeIntelligence?: ImpelCodeIntelligenceContext;
   // Phase 2 [UNVERIFIED]: inline files the platform wants materialized into
   // `/workspace/agents/<agentId>/` at prep time. Used for the agent-creator
   // live-editor path, whose source of truth is the caller's UNCOMMITTED draft
@@ -63,6 +64,21 @@ export interface ImpelEveRunContext {
     agentId: string;
     files: Array<{ path: string; content: string; enc?: "utf8" | "base64" }>;
   };
+}
+
+export interface ImpelCodeIntelligenceRepository {
+  provider: "github";
+  providerRepoId: string;
+  repoFullName: string;
+  commitSha: string;
+  requestedRef: string;
+}
+
+/** Exact-commit, non-secret workspace identity prepared by the Impel control plane. */
+export interface ImpelCodeIntelligenceContext {
+  workspaceId: string;
+  expiresAt?: string;
+  repositories: ImpelCodeIntelligenceRepository[];
 }
 
 export interface ImpelPreparedRepo {
@@ -214,6 +230,7 @@ export function defaultImpelEveChannel({
       runId?: string;
       traceId?: string;
       repos?: string[];
+      codeIntelligence?: ImpelCodeIntelligenceContext;
       workspacePrepared: boolean;
     }
   >({
@@ -354,8 +371,54 @@ export function normalizeImpelEveRunContext(
     traceId: readString(value.traceId),
     agent: isRecord(value.agent) ? value.agent : undefined,
     btParent: readString(value.btParent),
+    codeIntelligence: parseCodeIntelligenceContext(value.codeIntelligence),
     workspaceSeed: parseWorkspaceSeed(value.workspaceSeed),
   });
+}
+
+function parseCodeIntelligenceContext(
+  value: unknown,
+): ImpelCodeIntelligenceContext | undefined {
+  if (!isRecord(value)) return undefined;
+  const workspaceId = readString(value.workspaceId);
+  if (!workspaceId || !Array.isArray(value.repositories)) return undefined;
+  const repositories = value.repositories
+    .map((repository): ImpelCodeIntelligenceRepository | undefined => {
+      if (!isRecord(repository)) return undefined;
+      const providerRepoId = readString(repository.providerRepoId);
+      const repoFullName = readString(repository.repoFullName);
+      const commitSha = readString(repository.commitSha)?.toLowerCase();
+      const requestedRef = readString(repository.requestedRef);
+      if (
+        repository.provider !== "github" ||
+        !providerRepoId ||
+        !repoFullName ||
+        !commitSha ||
+        !/^[a-f0-9]{40,64}$/.test(commitSha) ||
+        !requestedRef
+      ) {
+        return undefined;
+      }
+      return {
+        provider: "github",
+        providerRepoId,
+        repoFullName,
+        commitSha,
+        requestedRef,
+      };
+    })
+    .filter(
+      (repository): repository is ImpelCodeIntelligenceRepository =>
+        repository !== undefined,
+    );
+  if (repositories.length === 0) return undefined;
+  return {
+    workspaceId,
+    ...(readString(value.expiresAt)
+      ? { expiresAt: readString(value.expiresAt) }
+      : {}),
+    repositories,
+  };
 }
 
 // Defensive parse of the Phase 2 inline workspace seed. Returns undefined unless
@@ -475,7 +538,7 @@ export async function prepareImpelEveWorkspace(
         {
           depth: checkoutDepth,
           path: planned.path,
-          ref: runContext.branch ?? "HEAD",
+          ref: impelEveCheckoutRef(runContext, planned.repo),
         },
       );
       prepared.push(checkout);
@@ -1082,6 +1145,18 @@ export function planImpelEveRepoCheckouts(
   }));
 }
 
+/** Resolve the immutable checkout ref prepared by the control plane, if present. */
+export function impelEveCheckoutRef(
+  runContext: ImpelEveRunContext,
+  repoFullName: string,
+): string {
+  const normalized = repoFullName.toLowerCase();
+  const exact = runContext.codeIntelligence?.repositories.find(
+    (repository) => repository.repoFullName.toLowerCase() === normalized,
+  );
+  return exact?.commitSha ?? runContext.branch ?? "HEAD";
+}
+
 export function createImpelWorkspaceContextMessage(
   runContext: ImpelEveRunContext | null,
 ): string | undefined {
@@ -1172,6 +1247,7 @@ function createWorkspaceKey(
     repos: plan.repos.map((repo) => ({
       path: repo.path,
       repo: repo.repo,
+      ref: impelEveCheckoutRef(runContext, repo.repo),
     })),
   });
 }
@@ -1304,6 +1380,7 @@ async function writeRunContextMarker(
     branch: runContext.branch,
     installationId: runContext.installationId,
     githubConnectorUid: runContext.githubConnectorUid,
+    codeIntelligence: runContext.codeIntelligence,
     repos: checkoutPlan.repos.map((repo) => ({
       repo: repo.repo,
       path: repo.path,
@@ -1340,6 +1417,7 @@ async function writeWorkspaceMetadata(
     // reaches the child's session directly.
     installationId: runContext.installationId,
     githubConnectorUid: runContext.githubConnectorUid,
+    codeIntelligence: runContext.codeIntelligence,
     repos,
   };
   const lines = [

@@ -18,6 +18,7 @@ import {
   planImpelEveRepoCheckouts,
   prepareImpelEveWorkspace,
   type ImpelEveChannelState,
+  type ImpelCodeIntelligenceContext,
   type ImpelEveRunContext,
   type ImpelPlannedRepoCheckout,
   type ImpelPreparedRepo,
@@ -58,6 +59,7 @@ type PersistedWorkspaceMetadata = {
   readonly traceId?: string;
   readonly installationId?: string | number;
   readonly githubConnectorUid?: string;
+  readonly codeIntelligence?: ImpelCodeIntelligenceContext;
   readonly pending?: boolean;
   readonly workspaceRoot: "/workspace";
 };
@@ -368,6 +370,10 @@ async function recoverRunContextFromSandboxMarker(
   ) {
     runContext.installationId = raw.installationId;
   }
+  const codeContext = normalizeImpelEveRunContext({
+    codeIntelligence: raw.codeIntelligence,
+  })?.codeIntelligence;
+  if (codeContext) runContext.codeIntelligence = codeContext;
   return runContext;
 }
 
@@ -429,6 +435,15 @@ function parsePreparedWorkspaceMetadata(
     layout: fields.layout,
     workspaceRoot: "/workspace",
     repos: fields.repos,
+    ...(normalizeImpelEveRunContext({
+      codeIntelligence: fields.source.codeIntelligence,
+    })?.codeIntelligence
+      ? {
+          codeIntelligence: normalizeImpelEveRunContext({
+            codeIntelligence: fields.source.codeIntelligence,
+          })!.codeIntelligence,
+        }
+      : {}),
     ...readOptionalWorkspaceMetadataStrings(fields.source),
   };
 }
@@ -490,6 +505,9 @@ function runContextFromPreparedWorkspaceMetadata(
     runContext.installationId = metadata.installationId;
   }
   copyStringProperty(runContext, "githubConnectorUid", metadata.githubConnectorUid);
+  if (metadata.codeIntelligence) {
+    runContext.codeIntelligence = metadata.codeIntelligence;
+  }
   return runContext;
 }
 
@@ -844,6 +862,7 @@ function workspaceRunContextKey(runContext: ImpelEveRunContext): string {
     installationId: runContext.installationId,
     runId: runContext.runId,
     traceId: runContext.traceId,
+    codeIntelligenceWorkspaceId: runContext.codeIntelligence?.workspaceId,
   });
 }
 

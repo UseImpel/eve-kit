@@ -79,6 +79,33 @@ export const EVE_KIT_PROVIDERS = [
         channelKind: "eve",
     },
     {
+        id: "code-intelligence-tools",
+        kind: "tool",
+        importPath: "@useimpel/eve-kit/eve/code-intelligence-tools",
+        exportName: "codeIntelligenceTools",
+        summary: "Read, search, symbol-context, impact, trace, diff-impact, and index-status tools backed by the multi-tenant Impel code-intelligence service. Repository identity and org/run headers come only from server-prepared Eve context.",
+        envVars: [
+            {
+                name: "IMPEL_CODE_INTELLIGENCE_URL",
+                required: true,
+                sensitive: false,
+                purpose: "Base URL of the Impel code-intelligence public API service.",
+            },
+            {
+                name: "IMPEL_CODE_INTELLIGENCE_RUNTIME_API_KEY",
+                required: true,
+                sensitive: true,
+                purpose: "Runtime bearer key. The tool adds server-derived x-impel-org-id and x-impel-run-id headers; agents never supply either identity.",
+            },
+        ],
+        setupSteps: [
+            "Export the desired named definitions as default files under agent/tools, for example `export { codeSearchTool as default } from \"@useimpel/eve-kit/eve/code-intelligence-tools\";`.",
+            "Configure the service URL and runtime key on the Eve deployment through the Impel-managed runtime environment.",
+            "Dispatch the run with attached repositories so the control plane can prepare an exact-commit codeIntelligence workspace in clientContext.",
+        ],
+        sinceVersion: "1.1.0",
+    },
+    {
         id: "whatsapp-channel",
         kind: "channel",
         importPath: "@useimpel/eve-kit/eve/whatsapp",

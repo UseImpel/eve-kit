@@ -31,6 +31,7 @@ export interface ImpelEveRunContext {
     traceId?: string;
     agent?: Record<string, unknown>;
     btParent?: string;
+    codeIntelligence?: ImpelCodeIntelligenceContext;
     workspaceSeed?: {
         agentId: string;
         files: Array<{
@@ -39,6 +40,19 @@ export interface ImpelEveRunContext {
             enc?: "utf8" | "base64";
         }>;
     };
+}
+export interface ImpelCodeIntelligenceRepository {
+    provider: "github";
+    providerRepoId: string;
+    repoFullName: string;
+    commitSha: string;
+    requestedRef: string;
+}
+/** Exact-commit, non-secret workspace identity prepared by the Impel control plane. */
+export interface ImpelCodeIntelligenceContext {
+    workspaceId: string;
+    expiresAt?: string;
+    repositories: ImpelCodeIntelligenceRepository[];
 }
 export interface ImpelPreparedRepo {
     repo: string;
@@ -101,6 +115,8 @@ export declare function normalizeImpelEveRunContext(value: unknown): ImpelEveRun
 export declare function normalizeClientContextMessages(value: unknown): string[] | undefined;
 export declare function prepareImpelEveWorkspace(state: ImpelEveChannelState, options: PrepareImpelEveWorkspaceOptions): Promise<void>;
 export declare function planImpelEveRepoCheckouts(repoNames: readonly string[]): ImpelPlannedRepoCheckout[];
+/** Resolve the immutable checkout ref prepared by the control plane, if present. */
+export declare function impelEveCheckoutRef(runContext: ImpelEveRunContext, repoFullName: string): string;
 export declare function createImpelWorkspaceContextMessage(runContext: ImpelEveRunContext | null): string | undefined;
 export declare function resolveVercelConnectGitHubConnectorUid(value?: string | undefined): string;
 export declare function createVercelConnectGitHubTokenParams(runContext: ImpelEveRunContext, readOnly?: boolean): Record<string, unknown>;
