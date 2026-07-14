@@ -10,7 +10,7 @@ account and performs one Anthropic Messages or OpenAI Responses model turn.
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v1.0.4.tar.gz
+npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v1.1.0.tar.gz
 ```
 
 ## Eve usage
@@ -165,6 +165,23 @@ import { impelJustBashSandbox } from "@useimpel/eve-kit/eve/sandbox";
 import { renderUiTool } from "@useimpel/eve-kit/eve/render-ui";
 import { createImpelBraintrustEvalConfig } from "@useimpel/eve-kit/eve/evals";
 ```
+
+Code-intelligence tools are opt-in files in each agent bundle. The tool name
+comes from the agent file name:
+
+```ts
+// agent/tools/code_search.ts
+export { codeSearchTool as default } from "@useimpel/eve-kit/eve/code-intelligence-tools";
+```
+
+The module also exports `codeWorkspaceStatusTool`, `codeReadTool`,
+`codeContextTool`, `codeImpactTool`, `codeTraceTool`, and
+`codeDiffImpactTool`. They read the non-secret exact-commit workspace from Eve
+channel metadata and authenticate with `IMPEL_CODE_INTELLIGENCE_URL` plus
+`IMPEL_CODE_INTELLIGENCE_RUNTIME_API_KEY`. The model never supplies org, run,
+workspace, commit, or provider-repository identity. When this context is
+present, Eve also checks out each mounted repository at that same resolved SHA,
+so shell exploration and service indexes cannot drift on a moving branch.
 
 `defaultImpelEveChannel()` preserves Eve's authenticated
 `GET /eve/v1/info` inspection route alongside Impel's stateful session routes,

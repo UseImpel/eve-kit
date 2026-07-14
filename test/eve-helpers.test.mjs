@@ -17,6 +17,7 @@ import {
   createVercelConnectGitHubTokenParams,
   defaultImpelEveChannel,
   extractImpelEveRunContextFromRequest,
+  impelEveCheckoutRef,
   normalizeImpelEveRunContext,
   planImpelEveRepoCheckouts,
   resolveVercelConnectGitHubConnectorUid,
@@ -102,6 +103,52 @@ test("normalizes and extracts Eve run context without consuming requests", async
   });
   assert.deepEqual(await extractImpelEveRunContextFromRequest(request), expected);
   assert.equal(await request.text(), body);
+});
+
+test("normalizes exact code-intelligence context and pins matching checkouts", () => {
+  const context = normalizeImpelEveRunContext({
+    orgId: "impel",
+    branch: "moving-branch",
+    codeIntelligence: {
+      workspaceId: "ws_123",
+      expiresAt: "2026-07-15T00:00:00.000Z",
+      repositories: [
+        {
+          provider: "github",
+          providerRepoId: "987",
+          repoFullName: "UseImpel/next",
+          commitSha: "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+          requestedRef: "main",
+        },
+        {
+          provider: "github",
+          providerRepoId: "invalid",
+          repoFullName: "UseImpel/invalid",
+          commitSha: "not-a-sha",
+          requestedRef: "main",
+        },
+      ],
+    },
+  });
+
+  assert.deepEqual(context?.codeIntelligence, {
+    workspaceId: "ws_123",
+    expiresAt: "2026-07-15T00:00:00.000Z",
+    repositories: [
+      {
+        provider: "github",
+        providerRepoId: "987",
+        repoFullName: "UseImpel/next",
+        commitSha: "abcdef0123456789abcdef0123456789abcdef01",
+        requestedRef: "main",
+      },
+    ],
+  });
+  assert.equal(
+    impelEveCheckoutRef(context, "useimpel/NEXT"),
+    "abcdef0123456789abcdef0123456789abcdef01",
+  );
+  assert.equal(impelEveCheckoutRef(context, "UseImpel/eve-kit"), "moving-branch");
 });
 
 test("preserves channel state and explicit trusted Vercel subjects", () => {

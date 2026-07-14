@@ -203,6 +203,11 @@ async function recoverRunContextFromSandboxMarker(sandbox) {
         typeof raw.installationId === "number") {
         runContext.installationId = raw.installationId;
     }
+    const codeContext = normalizeImpelEveRunContext({
+        codeIntelligence: raw.codeIntelligence,
+    })?.codeIntelligence;
+    if (codeContext)
+        runContext.codeIntelligence = codeContext;
     return runContext;
 }
 async function preparedWorkspaceFromSandboxMetadata(sessionId, sandbox) {
@@ -245,6 +250,15 @@ function parsePreparedWorkspaceMetadata(value) {
         layout: fields.layout,
         workspaceRoot: "/workspace",
         repos: fields.repos,
+        ...(normalizeImpelEveRunContext({
+            codeIntelligence: fields.source.codeIntelligence,
+        })?.codeIntelligence
+            ? {
+                codeIntelligence: normalizeImpelEveRunContext({
+                    codeIntelligence: fields.source.codeIntelligence,
+                }).codeIntelligence,
+            }
+            : {}),
         ...readOptionalWorkspaceMetadataStrings(fields.source),
     };
 }
@@ -290,6 +304,9 @@ function runContextFromPreparedWorkspaceMetadata(metadata) {
         runContext.installationId = metadata.installationId;
     }
     copyStringProperty(runContext, "githubConnectorUid", metadata.githubConnectorUid);
+    if (metadata.codeIntelligence) {
+        runContext.codeIntelligence = metadata.codeIntelligence;
+    }
     return runContext;
 }
 function plannedReposFromPreparedWorkspaceMetadata(metadata) {
@@ -488,6 +505,7 @@ function workspaceRunContextKey(runContext) {
         installationId: runContext.installationId,
         runId: runContext.runId,
         traceId: runContext.traceId,
+        codeIntelligenceWorkspaceId: runContext.codeIntelligence?.workspaceId,
     });
 }
 function pruneWorkspaceCache() {

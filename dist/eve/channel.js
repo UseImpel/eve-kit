@@ -145,8 +145,50 @@ export function normalizeImpelEveRunContext(value) {
         traceId: readString(value.traceId),
         agent: isRecord(value.agent) ? value.agent : undefined,
         btParent: readString(value.btParent),
+        codeIntelligence: parseCodeIntelligenceContext(value.codeIntelligence),
         workspaceSeed: parseWorkspaceSeed(value.workspaceSeed),
     });
+}
+function parseCodeIntelligenceContext(value) {
+    if (!isRecord(value))
+        return undefined;
+    const workspaceId = readString(value.workspaceId);
+    if (!workspaceId || !Array.isArray(value.repositories))
+        return undefined;
+    const repositories = value.repositories
+        .map((repository) => {
+        if (!isRecord(repository))
+            return undefined;
+        const providerRepoId = readString(repository.providerRepoId);
+        const repoFullName = readString(repository.repoFullName);
+        const commitSha = readString(repository.commitSha)?.toLowerCase();
+        const requestedRef = readString(repository.requestedRef);
+        if (repository.provider !== "github" ||
+            !providerRepoId ||
+            !repoFullName ||
+            !commitSha ||
+            !/^[a-f0-9]{40,64}$/.test(commitSha) ||
+            !requestedRef) {
+            return undefined;
+        }
+        return {
+            provider: "github",
+            providerRepoId,
+            repoFullName,
+            commitSha,
+            requestedRef,
+        };
+    })
+        .filter((repository) => repository !== undefined);
+    if (repositories.length === 0)
+        return undefined;
+    return {
+        workspaceId,
+        ...(readString(value.expiresAt)
+            ? { expiresAt: readString(value.expiresAt) }
+            : {}),
+        repositories,
+    };
 }
 // Defensive parse of the Phase 2 inline workspace seed. Returns undefined unless
 // it carries a non-empty agentId and at least one { path, content } file.
@@ -246,7 +288,7 @@ export async function prepareImpelEveWorkspace(state, options) {
             const checkout = await checkoutGitHubRepository(sandbox, planned.repoRef, {
                 depth: checkoutDepth,
                 path: planned.path,
-                ref: runContext.branch ?? "HEAD",
+                ref: impelEveCheckoutRef(runContext, planned.repo),
             });
             prepared.push(checkout);
         }
@@ -693,6 +735,12 @@ export function planImpelEveRepoCheckouts(repoNames) {
         role: repo.role,
     }));
 }
+/** Resolve the immutable checkout ref prepared by the control plane, if present. */
+export function impelEveCheckoutRef(runContext, repoFullName) {
+    const normalized = repoFullName.toLowerCase();
+    const exact = runContext.codeIntelligence?.repositories.find((repository) => repository.repoFullName.toLowerCase() === normalized);
+    return exact?.commitSha ?? runContext.branch ?? "HEAD";
+}
 export function createImpelWorkspaceContextMessage(runContext) {
     if (!runContext?.repos?.length)
         return undefined;
@@ -751,6 +799,7 @@ function createWorkspaceKey(runContext, plan) {
         repos: plan.repos.map((repo) => ({
             path: repo.path,
             repo: repo.repo,
+            ref: impelEveCheckoutRef(runContext, repo.repo),
         })),
     });
 }
@@ -813,6 +862,7 @@ async function writeRunContextMarker(sandbox, runContext, checkoutPlan) {
         branch: runContext.branch,
         installationId: runContext.installationId,
         githubConnectorUid: runContext.githubConnectorUid,
+        codeIntelligence: runContext.codeIntelligence,
         repos: checkoutPlan.repos.map((repo) => ({
             repo: repo.repo,
             path: repo.path,
@@ -844,6 +894,7 @@ async function writeWorkspaceMetadata(sandbox, runContext, repos, layout) {
         // reaches the child's session directly.
         installationId: runContext.installationId,
         githubConnectorUid: runContext.githubConnectorUid,
+        codeIntelligence: runContext.codeIntelligence,
         repos,
     };
     const lines = [
