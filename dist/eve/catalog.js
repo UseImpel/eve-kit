@@ -83,7 +83,7 @@ export const EVE_KIT_PROVIDERS = [
         kind: "tool",
         importPath: "@useimpel/eve-kit/eve/code-intelligence-tools",
         exportName: "codeIntelligenceTools",
-        summary: "Read, search, symbol-context, impact, trace, diff-impact, and index-status tools backed by the multi-tenant Impel code-intelligence service. Repository identity and org/run headers come only from server-prepared Eve context.",
+        summary: "Read, search, symbol-context, impact, trace, diff-impact, and index-status tools backed by the multi-tenant Impel code-intelligence service. Tenant identity comes only from the signed run assertion in Eve session auth.",
         envVars: [
             {
                 name: "IMPEL_CODE_INTELLIGENCE_URL",
@@ -91,17 +91,11 @@ export const EVE_KIT_PROVIDERS = [
                 sensitive: false,
                 purpose: "Base URL of the Impel code-intelligence public API service.",
             },
-            {
-                name: "IMPEL_CODE_INTELLIGENCE_RUNTIME_API_KEY",
-                required: true,
-                sensitive: true,
-                purpose: "Runtime bearer key. The tool adds server-derived x-impel-org-id and x-impel-run-id headers; agents never supply either identity.",
-            },
         ],
         setupSteps: [
             "Export the desired named definitions as default files under agent/tools, for example `export { codeSearchTool as default } from \"@useimpel/eve-kit/eve/code-intelligence-tools\";`.",
-            "Configure the service URL and runtime key on the Eve deployment through the Impel-managed runtime environment.",
-            "Dispatch the run with attached repositories so the control plane can prepare an exact-commit codeIntelligence workspace in clientContext.",
+            "Use defaultImpelEveChannel() so the signed identity assertion is carried in server-only Eve session auth.",
+            "Optionally configure the service URL on the Eve deployment; the production URL is the default.",
         ],
         sinceVersion: "1.1.0",
     },

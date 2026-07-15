@@ -1,6 +1,8 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { normalizeImpelEveRunContext, } from "./channel.js";
+import { IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE, } from "./channel.js";
+import { RUN_TOKEN_HEADER } from "../contracts/run-token.js";
+const DEFAULT_CODE_INTELLIGENCE_URL = "https://code-intelligence.useimpel.ai";
 const repositorySelector = z
     .string()
     .min(1)
@@ -63,29 +65,48 @@ function readString(value) {
         ? value.trim()
         : undefined;
 }
+const runtimeWorkspaceResponseSchema = z.object({
+    workspace: z.object({
+        workspaceId: z.string().min(1),
+        repositories: z
+            .array(z.object({
+            provider: z.literal("github"),
+            providerRepoId: z.string().min(1),
+            repoFullName: z.string().min(3),
+            commitSha: z.string().regex(/^[a-f0-9]{40,64}$/),
+            requestedRef: z.string().min(1),
+        }))
+            .min(1),
+    }),
+});
+function identityRunToken(ctx) {
+    for (const principal of [
+        ctx.session.auth.current,
+        ctx.session.auth.initiator,
+    ]) {
+        const token = readString(principal?.attributes[IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE]);
+        if (token && /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) {
+            return token;
+        }
+    }
+    throw new Error("This Eve session has no server-authenticated code-intelligence run token.");
+}
 async function requestScope(ctx) {
-    let runContext = normalizeImpelEveRunContext(ctx.channel?.metadata);
-    if (!runContext?.codeIntelligence) {
-        try {
-            const sandbox = await ctx.getSandbox();
-            const result = await sandbox.run({
-                command: "cat /workspace/.impel/run-context.json",
-            });
-            if (result.exitCode === 0) {
-                runContext = normalizeImpelEveRunContext(JSON.parse(String(result.stdout ?? "")));
-            }
-        }
-        catch {
-            // Top-level HTTP runs resolve from channel metadata. The marker fallback
-            // exists only for a co-resident subagent sharing the workspace.
-        }
+    const token = identityRunToken(ctx);
+    const baseUrl = process.env.IMPEL_CODE_INTELLIGENCE_URL?.trim() ??
+        DEFAULT_CODE_INTELLIGENCE_URL;
+    const payload = await serviceRequest(baseUrl, token, "/v1/runtime/workspace", {}, 30_000);
+    if (isFailure(payload))
+        return payload;
+    const parsed = runtimeWorkspaceResponseSchema.safeParse(payload);
+    if (!parsed.success) {
+        return failure("backend_unavailable", "Code-intelligence returned an invalid runtime workspace.", true);
     }
-    const orgId = readString(runContext?.orgId);
-    const runId = readString(runContext?.runId);
-    if (!orgId || !runId || !runContext?.codeIntelligence) {
-        throw new Error("No server-prepared code-intelligence workspace is attached to this Eve run.");
-    }
-    return { context: runContext.codeIntelligence, orgId, runId };
+    return {
+        baseUrl,
+        token,
+        workspace: parsed.data.workspace,
+    };
 }
 function selectRepository(context, selector) {
     if (!selector && context.repositories.length === 1) {
@@ -105,16 +126,13 @@ function selectRepository(context, selector) {
 async function postCodeIntelligence(ctx, path, input, options = {}) {
     try {
         const scope = await requestScope(ctx);
-        const baseUrl = process.env.IMPEL_CODE_INTELLIGENCE_URL?.trim();
-        const runtimeKey = process.env.IMPEL_CODE_INTELLIGENCE_RUNTIME_API_KEY?.trim();
-        if (!baseUrl || !runtimeKey) {
-            return failure("misconfigured", "The Eve runtime is missing IMPEL_CODE_INTELLIGENCE_URL or IMPEL_CODE_INTELLIGENCE_RUNTIME_API_KEY.");
-        }
+        if (isFailure(scope))
+            return scope;
         const repository = options.workspaceOnly
             ? undefined
-            : selectRepository(scope.context, options.repository);
+            : selectRepository(scope.workspace, options.repository);
         const body = {
-            workspaceId: scope.context.workspaceId,
+            workspaceId: scope.workspace.workspaceId,
             ...(repository
                 ? {
                     providerRepoId: repository.providerRepoId,
@@ -123,25 +141,32 @@ async function postCodeIntelligence(ctx, path, input, options = {}) {
                 : {}),
             ...input,
         };
-        const response = await fetch(new URL(path, baseUrl), {
-            method: "POST",
-            headers: {
-                authorization: `Bearer ${runtimeKey}`,
-                "content-type": "application/json",
-                "x-impel-org-id": scope.orgId,
-                "x-impel-run-id": scope.runId,
-            },
-            body: JSON.stringify(body),
-            signal: AbortSignal.timeout(270_000),
-        });
-        const payload = await response.json().catch(() => null);
-        if (payload !== null)
-            return payload;
-        return failure("backend_unavailable", `Code-intelligence returned non-JSON HTTP ${response.status}.`, response.status >= 500);
+        return serviceRequest(scope.baseUrl, scope.token, path, body, 270_000);
     }
     catch (error) {
         return failure("invalid_request", error instanceof Error ? error.message : String(error));
     }
+}
+function isFailure(value) {
+    return Boolean(value &&
+        typeof value === "object" &&
+        "ok" in value &&
+        value.ok === false);
+}
+async function serviceRequest(baseUrl, token, path, body, timeoutMs) {
+    const response = await fetch(new URL(path, baseUrl), {
+        method: "POST",
+        headers: {
+            "content-type": "application/json",
+            [RUN_TOKEN_HEADER]: token,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+    });
+    const payload = await response.json().catch(() => null);
+    if (payload !== null)
+        return payload;
+    return failure("backend_unavailable", `Code-intelligence returned non-JSON HTTP ${response.status}.`, response.status >= 500);
 }
 export const codeWorkspaceStatusTool = defineTool({
     description: "Show the exact commits and available code-intelligence indexes attached to this run. Use this first when a code query reports that an index is still being built.",

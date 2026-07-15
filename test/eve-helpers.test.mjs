@@ -221,6 +221,7 @@ test("default Eve session route seeds channel state from clientContext", async (
       headers: {
         authorization: `Basic ${Buffer.from("user:pass").toString("base64")}`,
         "content-type": "application/json",
+        "x-impel-identity-run-token": "v1.header.signature",
       },
       body: JSON.stringify({
         message: "count commits",
@@ -260,12 +261,17 @@ test("default Eve session route seeds channel state from clientContext", async (
   assert.deepEqual(sent[0].options.state.workspaceAuth, {
     identityRunToken: "v1.identity.payload",
   });
+  assert.equal(
+    sent[0].options.auth.attributes.impelIdentityRunToken,
+    "v1.header.signature",
+  );
   assert.equal(sent[0].options.state.workspace.prepared, false);
   assert.match(sent[0].options.continuationToken, /^eve:/);
   assert.equal(
     sent[0].input.context[0],
     'Client context:\n{"orgId":"impel","repos":["UseImpel/next"],"branch":"main","runToken":"v2.gateway.payload","identityRunToken":"v1.identity.payload"}',
   );
+  assert.doesNotMatch(sent[0].input.context.join("\n"), /v1\.header\.signature/);
   assert.match(sent[0].input.context[1], /UseImpel\/next: \/workspace/);
 });
 
