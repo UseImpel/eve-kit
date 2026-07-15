@@ -70,15 +70,23 @@ function withImpelIdentityRunToken(authenticate) {
         if (!authorized)
             return authorized;
         const token = canonicalIdentityRunToken(request.headers.get(IMPEL_IDENTITY_RUN_TOKEN_HEADER));
-        if (!token)
-            return authorized;
-        return {
-            ...authorized,
-            attributes: {
-                ...authorized.attributes,
-                [IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE]: token,
-            },
-        };
+        return attachImpelIdentityRunToken(authorized, token);
+    };
+}
+function attachImpelIdentityRunToken(authorized, value) {
+    const existing = canonicalIdentityRunToken(typeof authorized.attributes[IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE] ===
+        "string"
+        ? authorized.attributes[IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE]
+        : null);
+    const token = existing ?? canonicalIdentityRunToken(value);
+    if (!token)
+        return authorized;
+    return {
+        ...authorized,
+        attributes: {
+            ...authorized.attributes,
+            [IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE]: token,
+        },
     };
 }
 function canonicalIdentityRunToken(value) {
@@ -475,11 +483,12 @@ function createImpelEveRoutes(auth) {
             const parsed = parseCreateSessionBody(body);
             if (parsed instanceof Response)
                 return parsed;
+            const sessionAuth = attachImpelIdentityRunToken(authorized, readClientContextIdentityRunToken(parsed.clientContext));
             const state = createImpelEveChannelState(normalizeImpelEveRunContext(parsed.clientContext), {
                 identityRunToken: readClientContextIdentityRunToken(parsed.clientContext),
             });
             const session = await args.send(createSendPayload(parsed), withState({
-                auth: authorized,
+                auth: sessionAuth,
                 continuationToken: `eve:${crypto.randomUUID()}`,
                 mode: parsed.mode,
             }, state));
@@ -515,11 +524,12 @@ function createImpelEveRoutes(auth) {
             const parsed = parseContinueSessionBody(body);
             if (parsed instanceof Response)
                 return parsed;
+            const sessionAuth = attachImpelIdentityRunToken(authorized, readClientContextIdentityRunToken(parsed.clientContext));
             const state = createImpelEveChannelState(normalizeImpelEveRunContext(parsed.clientContext), {
                 identityRunToken: readClientContextIdentityRunToken(parsed.clientContext),
             });
             const session = await args.send(createSendPayload(parsed), withState({
-                auth: authorized,
+                auth: sessionAuth,
                 continuationToken: parsed.continuationToken,
             }, state));
             return Response.json({
