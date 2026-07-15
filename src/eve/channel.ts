@@ -193,6 +193,10 @@ type VercelConnectModule = {
 const DEFAULT_GITHUB_CONNECTOR_UID = "github/useimpel-github";
 const EVE_SESSION_ID_HEADER = "x-eve-session-id";
 const EVE_MESSAGE_STREAM_CONTENT_TYPE = "application/x-ndjson; charset=utf-8";
+export const IMPEL_IDENTITY_RUN_TOKEN_HEADER =
+  "x-impel-identity-run-token" as const;
+export const IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE =
+  "impelIdentityRunToken" as const;
 
 export function defaultImpelEveChannel({
   basicUser = process.env.EVE_APP_BASIC_USER ??
@@ -211,15 +215,15 @@ export function defaultImpelEveChannel({
       : [];
 
   const auth = [
-    localDev(),
     vercelOidc(
       trustedVercelSubjects?.length
         ? { subjects: trustedVercelSubjects }
         : undefined,
     ),
+    localDev(),
     ...basic,
     ...(includePlaceholderAuth ? [placeholderAuth()] : []),
-  ];
+  ].map(withImpelIdentityRunToken);
 
   return defineChannel<
     ImpelEveChannelState,
@@ -263,6 +267,55 @@ export function defaultImpelEveChannel({
       },
     },
   });
+}
+
+function withImpelIdentityRunToken(authenticate: AuthFn<Request>): AuthFn<Request> {
+  return async (request) => {
+    const authorized = await authenticate(request);
+    if (!authorized) return authorized;
+
+    const token = canonicalIdentityRunToken(
+      request.headers.get(IMPEL_IDENTITY_RUN_TOKEN_HEADER),
+    );
+    return attachImpelIdentityRunToken(authorized, token);
+  };
+}
+
+type ImpelSessionAuthContext = NonNullable<
+  Awaited<ReturnType<AuthFn<Request>>>
+>;
+
+function attachImpelIdentityRunToken(
+  authorized: ImpelSessionAuthContext,
+  value: string | null,
+): ImpelSessionAuthContext {
+  const existing = canonicalIdentityRunToken(
+    typeof authorized.attributes[IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE] ===
+      "string"
+      ? authorized.attributes[IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE]
+      : null,
+  );
+  const token = existing ?? canonicalIdentityRunToken(value);
+  if (!token) return authorized;
+  return {
+    ...authorized,
+    attributes: {
+      ...authorized.attributes,
+      [IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE]: token,
+    },
+  };
+}
+
+function canonicalIdentityRunToken(value: string | null): string | null {
+  const token = value?.trim();
+  if (
+    !token ||
+    Buffer.byteLength(token, "utf8") > 8 * 1024 ||
+    !/^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)
+  ) {
+    return null;
+  }
+  return token;
 }
 
 export function createImpelEveChannelState(
@@ -724,6 +777,11 @@ function createImpelEveRoutes(auth: readonly AuthFn<Request>[]) {
       const parsed = parseCreateSessionBody(body);
       if (parsed instanceof Response) return parsed;
 
+      const sessionAuth = attachImpelIdentityRunToken(
+        authorized,
+        readClientContextIdentityRunToken(parsed.clientContext),
+      );
+
       const state = createImpelEveChannelState(
         normalizeImpelEveRunContext(parsed.clientContext),
         {
@@ -736,7 +794,7 @@ function createImpelEveRoutes(auth: readonly AuthFn<Request>[]) {
         createSendPayload(parsed),
         withState(
           {
-            auth: authorized,
+            auth: sessionAuth,
             continuationToken: `eve:${crypto.randomUUID()}`,
             mode: parsed.mode,
           },
@@ -781,6 +839,11 @@ function createImpelEveRoutes(auth: readonly AuthFn<Request>[]) {
         const parsed = parseContinueSessionBody(body);
         if (parsed instanceof Response) return parsed;
 
+        const sessionAuth = attachImpelIdentityRunToken(
+          authorized,
+          readClientContextIdentityRunToken(parsed.clientContext),
+        );
+
         const state = createImpelEveChannelState(
           normalizeImpelEveRunContext(parsed.clientContext),
           {
@@ -793,7 +856,7 @@ function createImpelEveRoutes(auth: readonly AuthFn<Request>[]) {
           createSendPayload(parsed),
           withState(
             {
-              auth: authorized,
+              auth: sessionAuth,
               continuationToken: parsed.continuationToken,
             },
             state,

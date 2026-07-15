@@ -221,6 +221,7 @@ test("default Eve session route seeds channel state from clientContext", async (
       headers: {
         authorization: `Basic ${Buffer.from("user:pass").toString("base64")}`,
         "content-type": "application/json",
+        "x-impel-identity-run-token": "v1.header.signature",
       },
       body: JSON.stringify({
         message: "count commits",
@@ -260,11 +261,50 @@ test("default Eve session route seeds channel state from clientContext", async (
   assert.deepEqual(sent[0].options.state.workspaceAuth, {
     identityRunToken: "v1.identity.payload",
   });
+  assert.equal(
+    sent[0].options.auth.attributes.impelIdentityRunToken,
+    "v1.header.signature",
+  );
   assert.equal(sent[0].options.state.workspace.prepared, false);
   assert.match(sent[0].options.continuationToken, /^eve:/);
   assert.equal(
     sent[0].input.context[0],
     'Client context:\n{"orgId":"impel","repos":["UseImpel/next"],"branch":"main","runToken":"v2.gateway.payload","identityRunToken":"v1.identity.payload"}',
+  );
+  assert.doesNotMatch(sent[0].input.context.join("\n"), /v1\.header\.signature/);
+
+  const legacyResponse = await route.handler(
+    new Request("https://agent.example/eve/v1/session", {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${Buffer.from("user:pass").toString("base64")}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        message: "legacy dispatcher",
+        clientContext: { identityRunToken: "v1.legacy.signature" },
+      }),
+    }),
+    {
+      async send(input, options) {
+        sent.push({ input, options });
+        return { continuationToken: "eve:legacy-token", id: "ses_legacy" };
+      },
+      getSession() {
+        throw new Error("not used");
+      },
+      params: {},
+      receive() {
+        throw new Error("not used");
+      },
+      requestIp: null,
+      waitUntil() {},
+    },
+  );
+  assert.equal(legacyResponse.status, 202);
+  assert.equal(
+    sent[1].options.auth.attributes.impelIdentityRunToken,
+    "v1.legacy.signature",
   );
   assert.match(sent[0].input.context[1], /UseImpel\/next: \/workspace/);
 });

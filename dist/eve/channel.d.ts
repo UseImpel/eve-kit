@@ -102,6 +102,8 @@ export declare class ImpelIdentityResolveError extends Error {
         status?: number;
     });
 }
+export declare const IMPEL_IDENTITY_RUN_TOKEN_HEADER: "x-impel-identity-run-token";
+export declare const IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE: "impelIdentityRunToken";
 export declare function defaultImpelEveChannel({ basicUser, basicPassword, includePlaceholderAuth, prepareAttachedRepos, checkoutDepth, trustedVercelSubjects, referenceRepos, }?: DefaultImpelEveChannelOptions): ImpelEveChannel;
 export declare function createImpelEveChannelState(runContext: ImpelEveRunContext | null, workspaceAuth?: {
     identityRunToken?: string | null;

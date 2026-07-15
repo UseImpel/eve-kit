@@ -16,6 +16,8 @@ export class ImpelIdentityResolveError extends Error {
 const DEFAULT_GITHUB_CONNECTOR_UID = "github/useimpel-github";
 const EVE_SESSION_ID_HEADER = "x-eve-session-id";
 const EVE_MESSAGE_STREAM_CONTENT_TYPE = "application/x-ndjson; charset=utf-8";
+export const IMPEL_IDENTITY_RUN_TOKEN_HEADER = "x-impel-identity-run-token";
+export const IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE = "impelIdentityRunToken";
 export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_USER ??
     process.env.IMPEL_EVE_BASIC_USER, basicPassword = process.env.EVE_APP_BASIC_PASSWORD ??
     process.env.IMPEL_EVE_BASIC_PASSWORD, includePlaceholderAuth = false, prepareAttachedRepos = true, checkoutDepth = readCheckoutDepthFromEnv(), trustedVercelSubjects, referenceRepos, } = {}) {
@@ -23,13 +25,13 @@ export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_U
         ? [httpBasic({ username: basicUser, password: basicPassword })]
         : [];
     const auth = [
-        localDev(),
         vercelOidc(trustedVercelSubjects?.length
             ? { subjects: trustedVercelSubjects }
             : undefined),
+        localDev(),
         ...basic,
         ...(includePlaceholderAuth ? [placeholderAuth()] : []),
-    ];
+    ].map(withImpelIdentityRunToken);
     return defineChannel({
         state: createImpelEveChannelState(null),
         context(state) {
@@ -61,6 +63,40 @@ export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_U
             },
         },
     });
+}
+function withImpelIdentityRunToken(authenticate) {
+    return async (request) => {
+        const authorized = await authenticate(request);
+        if (!authorized)
+            return authorized;
+        const token = canonicalIdentityRunToken(request.headers.get(IMPEL_IDENTITY_RUN_TOKEN_HEADER));
+        return attachImpelIdentityRunToken(authorized, token);
+    };
+}
+function attachImpelIdentityRunToken(authorized, value) {
+    const existing = canonicalIdentityRunToken(typeof authorized.attributes[IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE] ===
+        "string"
+        ? authorized.attributes[IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE]
+        : null);
+    const token = existing ?? canonicalIdentityRunToken(value);
+    if (!token)
+        return authorized;
+    return {
+        ...authorized,
+        attributes: {
+            ...authorized.attributes,
+            [IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE]: token,
+        },
+    };
+}
+function canonicalIdentityRunToken(value) {
+    const token = value?.trim();
+    if (!token ||
+        Buffer.byteLength(token, "utf8") > 8 * 1024 ||
+        !/^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) {
+        return null;
+    }
+    return token;
 }
 export function createImpelEveChannelState(runContext, workspaceAuth) {
     return {
@@ -447,11 +483,12 @@ function createImpelEveRoutes(auth) {
             const parsed = parseCreateSessionBody(body);
             if (parsed instanceof Response)
                 return parsed;
+            const sessionAuth = attachImpelIdentityRunToken(authorized, readClientContextIdentityRunToken(parsed.clientContext));
             const state = createImpelEveChannelState(normalizeImpelEveRunContext(parsed.clientContext), {
                 identityRunToken: readClientContextIdentityRunToken(parsed.clientContext),
             });
             const session = await args.send(createSendPayload(parsed), withState({
-                auth: authorized,
+                auth: sessionAuth,
                 continuationToken: `eve:${crypto.randomUUID()}`,
                 mode: parsed.mode,
             }, state));
@@ -487,11 +524,12 @@ function createImpelEveRoutes(auth) {
             const parsed = parseContinueSessionBody(body);
             if (parsed instanceof Response)
                 return parsed;
+            const sessionAuth = attachImpelIdentityRunToken(authorized, readClientContextIdentityRunToken(parsed.clientContext));
             const state = createImpelEveChannelState(normalizeImpelEveRunContext(parsed.clientContext), {
                 identityRunToken: readClientContextIdentityRunToken(parsed.clientContext),
             });
             const session = await args.send(createSendPayload(parsed), withState({
-                auth: authorized,
+                auth: sessionAuth,
                 continuationToken: parsed.continuationToken,
             }, state));
             return Response.json({

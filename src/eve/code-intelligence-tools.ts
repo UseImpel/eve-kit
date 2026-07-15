@@ -1,10 +1,12 @@
 import { defineTool, type ToolContext, type ToolDefinition } from "eve/tools";
 import { z } from "zod";
 import {
-  normalizeImpelEveRunContext,
-  type ImpelCodeIntelligenceContext,
+  IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE,
   type ImpelCodeIntelligenceRepository,
 } from "./channel.js";
+import { RUN_TOKEN_HEADER } from "../contracts/run-token.js";
+
+const DEFAULT_CODE_INTELLIGENCE_URL = "https://code-intelligence.useimpel.ai";
 
 const repositorySelector = z
   .string()
@@ -68,16 +70,13 @@ const diffImpactInput = z.object({
   limit: z.number().int().min(1).max(200).default(50),
 });
 
-type CodeToolContext = ToolContext & {
-  readonly channel?: {
-    readonly metadata?: Readonly<Record<string, unknown>>;
-  };
-};
-
 type RequestScope = {
-  context: ImpelCodeIntelligenceContext;
-  orgId: string;
-  runId: string;
+  baseUrl: string;
+  token: string;
+  workspace: {
+    workspaceId: string;
+    repositories: ImpelCodeIntelligenceRepository[];
+  };
 };
 
 type CodeIntelligenceFailure = {
@@ -103,36 +102,64 @@ function readString(value: unknown): string | undefined {
     : undefined;
 }
 
-async function requestScope(ctx: CodeToolContext): Promise<RequestScope> {
-  let runContext = normalizeImpelEveRunContext(ctx.channel?.metadata);
-  if (!runContext?.codeIntelligence) {
-    try {
-      const sandbox = await ctx.getSandbox();
-      const result = await sandbox.run({
-        command: "cat /workspace/.impel/run-context.json",
-      });
-      if (result.exitCode === 0) {
-        runContext = normalizeImpelEveRunContext(
-          JSON.parse(String(result.stdout ?? "")),
-        );
-      }
-    } catch {
-      // Top-level HTTP runs resolve from channel metadata. The marker fallback
-      // exists only for a co-resident subagent sharing the workspace.
+const runtimeWorkspaceResponseSchema = z.object({
+  workspace: z.object({
+    workspaceId: z.string().min(1),
+    repositories: z
+      .array(
+        z.object({
+          provider: z.literal("github"),
+          providerRepoId: z.string().min(1),
+          repoFullName: z.string().min(3),
+          commitSha: z.string().regex(/^[a-f0-9]{40,64}$/),
+          requestedRef: z.string().min(1),
+        }),
+      )
+      .min(1),
+  }),
+});
+
+function identityRunToken(ctx: ToolContext): string {
+  for (const principal of [
+    ctx.session.auth.current,
+    ctx.session.auth.initiator,
+  ]) {
+    const token = readString(
+      principal?.attributes[IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE],
+    );
+    if (token && /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) {
+      return token;
     }
   }
-  const orgId = readString(runContext?.orgId);
-  const runId = readString(runContext?.runId);
-  if (!orgId || !runId || !runContext?.codeIntelligence) {
-    throw new Error(
-      "No server-prepared code-intelligence workspace is attached to this Eve run.",
+  throw new Error(
+    "This Eve session has no server-authenticated code-intelligence run token.",
+  );
+}
+
+async function requestScope(ctx: ToolContext): Promise<RequestScope | CodeIntelligenceFailure> {
+  const token = identityRunToken(ctx);
+  const baseUrl =
+    process.env.IMPEL_CODE_INTELLIGENCE_URL?.trim() ??
+    DEFAULT_CODE_INTELLIGENCE_URL;
+  const payload = await serviceRequest(baseUrl, token, "/v1/runtime/workspace", {}, 30_000);
+  if (isFailure(payload)) return payload;
+  const parsed = runtimeWorkspaceResponseSchema.safeParse(payload);
+  if (!parsed.success) {
+    return failure(
+      "backend_unavailable",
+      "Code-intelligence returned an invalid runtime workspace.",
+      true,
     );
   }
-  return { context: runContext.codeIntelligence, orgId, runId };
+  return {
+    baseUrl,
+    token,
+    workspace: parsed.data.workspace,
+  };
 }
 
 function selectRepository(
-  context: ImpelCodeIntelligenceContext,
+  context: RequestScope["workspace"],
   selector: string | undefined,
 ): ImpelCodeIntelligenceRepository {
   if (!selector && context.repositories.length === 1) {
@@ -156,27 +183,19 @@ function selectRepository(
 }
 
 async function postCodeIntelligence(
-  ctx: CodeToolContext,
+  ctx: ToolContext,
   path: string,
   input: Readonly<Record<string, unknown>>,
   options: { repository?: string; workspaceOnly?: boolean } = {},
 ): Promise<unknown> {
   try {
     const scope = await requestScope(ctx);
-    const baseUrl = process.env.IMPEL_CODE_INTELLIGENCE_URL?.trim();
-    const runtimeKey =
-      process.env.IMPEL_CODE_INTELLIGENCE_RUNTIME_API_KEY?.trim();
-    if (!baseUrl || !runtimeKey) {
-      return failure(
-        "misconfigured",
-        "The Eve runtime is missing IMPEL_CODE_INTELLIGENCE_URL or IMPEL_CODE_INTELLIGENCE_RUNTIME_API_KEY.",
-      );
-    }
+    if (isFailure(scope)) return scope;
     const repository = options.workspaceOnly
       ? undefined
-      : selectRepository(scope.context, options.repository);
+      : selectRepository(scope.workspace, options.repository);
     const body = {
-      workspaceId: scope.context.workspaceId,
+      workspaceId: scope.workspace.workspaceId,
       ...(repository
         ? {
             providerRepoId: repository.providerRepoId,
@@ -185,24 +204,7 @@ async function postCodeIntelligence(
         : {}),
       ...input,
     };
-    const response = await fetch(new URL(path, baseUrl), {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${runtimeKey}`,
-        "content-type": "application/json",
-        "x-impel-org-id": scope.orgId,
-        "x-impel-run-id": scope.runId,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(270_000),
-    });
-    const payload = await response.json().catch(() => null);
-    if (payload !== null) return payload;
-    return failure(
-      "backend_unavailable",
-      `Code-intelligence returned non-JSON HTTP ${response.status}.`,
-      response.status >= 500,
-    );
+    return serviceRequest(scope.baseUrl, scope.token, path, body, 270_000);
   } catch (error) {
     return failure(
       "invalid_request",
@@ -211,13 +213,47 @@ async function postCodeIntelligence(
   }
 }
 
+function isFailure(value: unknown): value is CodeIntelligenceFailure {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      "ok" in value &&
+      (value as { ok?: unknown }).ok === false,
+  );
+}
+
+async function serviceRequest(
+  baseUrl: string,
+  token: string,
+  path: string,
+  body: Readonly<Record<string, unknown>>,
+  timeoutMs: number,
+): Promise<unknown> {
+  const response = await fetch(new URL(path, baseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      [RUN_TOKEN_HEADER]: token,
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const payload = await response.json().catch(() => null);
+  if (payload !== null) return payload;
+  return failure(
+    "backend_unavailable",
+    `Code-intelligence returned non-JSON HTTP ${response.status}.`,
+    response.status >= 500,
+  );
+}
+
 export const codeWorkspaceStatusTool = defineTool({
   description:
     "Show the exact commits and available code-intelligence indexes attached to this run. Use this first when a code query reports that an index is still being built.",
   inputSchema: z.object({}),
   async execute(_input, ctx) {
     return postCodeIntelligence(
-      ctx as CodeToolContext,
+      ctx,
       "/v1/code/workspace-status",
       {},
       { workspaceOnly: true },
@@ -230,7 +266,7 @@ export const codeReadTool = defineTool({
     "Read a file from an attached repository at the run's exact commit, optionally limited to a 1-based line range.",
   inputSchema: readInput,
   async execute({ repository, ...input }, ctx) {
-    return postCodeIntelligence(ctx as CodeToolContext, "/v1/code/read", input, {
+    return postCodeIntelligence(ctx, "/v1/code/read", input, {
       repository,
     });
   },
@@ -241,7 +277,7 @@ export const codeSearchTool = defineTool({
     "Search an attached repository at the exact run commit. Use text/regex for literals, structural for AST patterns, symbol for graph-backed definitions/references, and security plus a language for an OpenGrep pattern. Semantic mode may be disabled.",
   inputSchema: searchInput,
   async execute({ repository, ...input }, ctx) {
-    return postCodeIntelligence(ctx as CodeToolContext, "/v1/code/search", input, {
+    return postCodeIntelligence(ctx, "/v1/code/search", input, {
       repository,
     });
   },
@@ -256,7 +292,7 @@ function symbolTool(
     inputSchema: symbolInput,
     async execute({ repository, ...input }, ctx) {
       return postCodeIntelligence(
-        ctx as CodeToolContext,
+        ctx,
         `/v1/code/${operation}`,
         input,
         { repository },
@@ -280,7 +316,7 @@ export const codeTraceTool = defineTool({
     "Trace dependency or call paths between two symbols in an attached repository at the exact run commit.",
   inputSchema: traceInput,
   async execute({ repository, ...input }, ctx) {
-    return postCodeIntelligence(ctx as CodeToolContext, "/v1/code/trace", input, {
+    return postCodeIntelligence(ctx, "/v1/code/trace", input, {
       repository,
     });
   },
@@ -292,7 +328,7 @@ export const codeDiffImpactTool = defineTool({
   inputSchema: diffImpactInput,
   async execute({ repository, ...input }, ctx) {
     return postCodeIntelligence(
-      ctx as CodeToolContext,
+      ctx,
       "/v1/code/diff-impact",
       input,
       { repository },

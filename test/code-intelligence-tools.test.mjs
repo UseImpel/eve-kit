@@ -7,10 +7,8 @@ import {
   codeWorkspaceStatusTool,
 } from "../dist/eve/code-intelligence-tools.js";
 
-const exactContext = {
-  orgId: "impel",
-  runId: "run_123",
-  codeIntelligence: {
+const exactWorkspace = {
+  workspace: {
     workspaceId: "ws_123",
     repositories: [
       {
@@ -24,11 +22,23 @@ const exactContext = {
   },
 };
 
-function toolContext(metadata = exactContext) {
+function toolContext(token = "v1.identity.payload") {
   return {
-    channel: { metadata },
+    session: {
+      auth: {
+        current: token
+          ? {
+              attributes: { impelIdentityRunToken: token },
+              authenticator: "test",
+              principalId: "caller",
+              principalType: "service",
+            }
+          : null,
+        initiator: null,
+      },
+    },
     async getSandbox() {
-      throw new Error("sandbox fallback should not be used");
+      throw new Error("sandbox should not be used");
     },
   };
 }
@@ -52,17 +62,22 @@ test("exports the complete opt-in code-intelligence tool set", () => {
 
 test("binds workspace and exact repository identity outside model input", async () => {
   const originalUrl = process.env.IMPEL_CODE_INTELLIGENCE_URL;
-  const originalKey = process.env.IMPEL_CODE_INTELLIGENCE_RUNTIME_API_KEY;
   const originalFetch = globalThis.fetch;
   try {
     process.env.IMPEL_CODE_INTELLIGENCE_URL = "https://code.example/base/";
-    process.env.IMPEL_CODE_INTELLIGENCE_RUNTIME_API_KEY = "runtime-secret";
+    let calls = 0;
     globalThis.fetch = async (input, init) => {
+      calls += 1;
+      if (calls === 1) {
+        assert.equal(String(input), "https://code.example/v1/runtime/workspace");
+        assert.equal(init.headers["x-impel-run-token"], "v1.identity.payload");
+        assert.deepEqual(JSON.parse(init.body), {});
+        return Response.json(exactWorkspace);
+      }
       assert.equal(String(input), "https://code.example/v1/code/read");
       assert.equal(init.method, "POST");
-      assert.equal(init.headers.authorization, "Bearer runtime-secret");
-      assert.equal(init.headers["x-impel-org-id"], "impel");
-      assert.equal(init.headers["x-impel-run-id"], "run_123");
+      assert.equal(init.headers["x-impel-run-token"], "v1.identity.payload");
+      assert.equal("authorization" in init.headers, false);
       assert.deepEqual(JSON.parse(init.body), {
         workspaceId: "ws_123",
         providerRepoId: "987",
@@ -83,19 +98,19 @@ test("binds workspace and exact repository identity outside model input", async 
     );
   } finally {
     restoreEnv("IMPEL_CODE_INTELLIGENCE_URL", originalUrl);
-    restoreEnv("IMPEL_CODE_INTELLIGENCE_RUNTIME_API_KEY", originalKey);
     globalThis.fetch = originalFetch;
   }
 });
 
 test("workspace status does not accept model-selected repository identity", async () => {
   const originalUrl = process.env.IMPEL_CODE_INTELLIGENCE_URL;
-  const originalKey = process.env.IMPEL_CODE_INTELLIGENCE_RUNTIME_API_KEY;
   const originalFetch = globalThis.fetch;
   try {
     process.env.IMPEL_CODE_INTELLIGENCE_URL = "https://code.example";
-    process.env.IMPEL_CODE_INTELLIGENCE_RUNTIME_API_KEY = "runtime-secret";
+    let calls = 0;
     globalThis.fetch = async (_input, init) => {
+      calls += 1;
+      if (calls === 1) return Response.json(exactWorkspace);
       assert.deepEqual(JSON.parse(init.body), { workspaceId: "ws_123" });
       return Response.json({ ok: true });
     };
@@ -105,30 +120,27 @@ test("workspace status does not accept model-selected repository identity", asyn
     );
   } finally {
     restoreEnv("IMPEL_CODE_INTELLIGENCE_URL", originalUrl);
-    restoreEnv("IMPEL_CODE_INTELLIGENCE_RUNTIME_API_KEY", originalKey);
     globalThis.fetch = originalFetch;
   }
 });
 
 test("fails closed before network access for missing or out-of-scope context", async () => {
   const originalUrl = process.env.IMPEL_CODE_INTELLIGENCE_URL;
-  const originalKey = process.env.IMPEL_CODE_INTELLIGENCE_RUNTIME_API_KEY;
   const originalFetch = globalThis.fetch;
   let fetchCalls = 0;
   try {
     process.env.IMPEL_CODE_INTELLIGENCE_URL = "https://code.example";
-    process.env.IMPEL_CODE_INTELLIGENCE_RUNTIME_API_KEY = "runtime-secret";
     globalThis.fetch = async () => {
       fetchCalls += 1;
-      return Response.json({ ok: true });
+      return Response.json(exactWorkspace);
     };
 
     const missing = await codeSearchTool.execute(
       { mode: "text", query: "token", limit: 20 },
-      toolContext({ orgId: "impel", runId: "run_123" }),
+      toolContext(null),
     );
     assert.equal(missing.ok, false);
-    assert.match(missing.error.message, /No server-prepared/);
+    assert.match(missing.error.message, /no server-authenticated/i);
 
     const outside = await codeSearchTool.execute(
       {
@@ -141,10 +153,9 @@ test("fails closed before network access for missing or out-of-scope context", a
     );
     assert.equal(outside.ok, false);
     assert.match(outside.error.message, /outside this exact workspace/);
-    assert.equal(fetchCalls, 0);
+    assert.equal(fetchCalls, 1);
   } finally {
     restoreEnv("IMPEL_CODE_INTELLIGENCE_URL", originalUrl);
-    restoreEnv("IMPEL_CODE_INTELLIGENCE_RUNTIME_API_KEY", originalKey);
     globalThis.fetch = originalFetch;
   }
 });
