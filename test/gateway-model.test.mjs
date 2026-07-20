@@ -643,23 +643,31 @@ test("maps pool errors on stream setup and leaves unrelated API errors intact", 
       error.isRetryable === true,
   );
 
+  const sensitiveMarker = "person@example.com unrelated-private-context";
   const unrelated = impelGatewayModel("sonnet", {
     ...baseOptions(async () =>
       Response.json(
         {
           type: "error",
-          error: { type: "invalid_request_error", message: "bad prompt" },
+          error: { type: "invalid_request_error", message: `bad prompt: ${sensitiveMarker}` },
         },
         { status: 400 },
       ),
     ),
   });
   await assert.rejects(
-    () => unrelated.doGenerate({ prompt: userPrompt("hello") }),
-    (error) =>
-      APICallError.isInstance(error) &&
-      !(error instanceof ImpelGatewayPoolError) &&
-      error.statusCode === 400,
+    () => unrelated.doGenerate({ prompt: userPrompt(sensitiveMarker) }),
+    (error) => {
+      assert.ok(APICallError.isInstance(error));
+      assert.ok(!(error instanceof ImpelGatewayPoolError));
+      assert.equal(error.statusCode, 400);
+      assert.equal(error.url, "");
+      assert.equal(error.requestBodyValues, undefined);
+      assert.equal(error.responseBody, undefined);
+      assert.equal(error.responseHeaders, undefined);
+      assert.doesNotMatch(inspect(error, { depth: 10 }), /person@example\.com|unrelated-private-context/);
+      return true;
+    },
   );
 });
 
