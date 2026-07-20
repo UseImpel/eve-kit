@@ -255,7 +255,7 @@ export class ImpelGatewayLanguageModel implements LanguageModelV4 {
     try {
       return await inner.doGenerate(prepared);
     } catch (error) {
-      throw mapGatewayPoolError(error, this.resolved.modelId);
+      throw mapGatewayError(error, this.resolved.modelId);
     }
   }
 
@@ -270,7 +270,7 @@ export class ImpelGatewayLanguageModel implements LanguageModelV4 {
         stream: wrapStreamErrors(result.stream, this.resolved.modelId),
       };
     } catch (error) {
-      throw mapGatewayPoolError(error, this.resolved.modelId);
+      throw mapGatewayError(error, this.resolved.modelId);
     }
   }
 
@@ -814,7 +814,7 @@ function wrapStreamErrors(
         const part = next.value;
         controller.enqueue(
           part.type === "error"
-            ? { ...part, error: mapGatewayPoolError(part.error, modelId) }
+            ? { ...part, error: mapGatewayError(part.error, modelId) }
             : part,
         );
       } catch (error) {
@@ -822,7 +822,7 @@ function wrapStreamErrors(
           finished = true;
           reader.releaseLock();
         }
-        controller.error(mapGatewayPoolError(error, modelId));
+        controller.error(mapGatewayError(error, modelId));
       }
     },
     async cancel(reason) {
@@ -837,7 +837,7 @@ function wrapStreamErrors(
   });
 }
 
-function mapGatewayPoolError(error: unknown, fallbackModel: string): unknown {
+function mapGatewayError(error: unknown, fallbackModel: string): Error {
   if (error instanceof ImpelGatewayPoolError) return error;
 
   const apiError = APICallError.isInstance(error) ? error : undefined;
@@ -865,7 +865,28 @@ function mapGatewayPoolError(error: unknown, fallbackModel: string): unknown {
       statusCode: apiError?.statusCode,
     });
   }
-  return error;
+  if (apiError) {
+    return new APICallError({
+      message: gatewayRequestErrorMessage(apiError.statusCode, fallbackModel),
+      url: "",
+      requestBodyValues: undefined,
+      statusCode: apiError.statusCode,
+      responseHeaders: undefined,
+      responseBody: undefined,
+      isRetryable: apiError.isRetryable,
+    });
+  }
+  const sanitized = new Error(gatewayRequestErrorMessage(undefined, fallbackModel));
+  sanitized.name = "ImpelGatewayError";
+  return sanitized;
+}
+
+function gatewayRequestErrorMessage(
+  statusCode: number | undefined,
+  model: string,
+): string {
+  const status = statusCode === undefined ? "" : ` with HTTP ${statusCode}`;
+  return `Gateway request failed${status} for model ${model}.`;
 }
 
 function poolErrorMessage(
