@@ -28,14 +28,19 @@ export interface ImpelGatewayModelOptions {
 export type ImpelGatewayPoolErrorCode = "model_not_entitled" | "pool_exhausted" | "pool_rate_limited";
 export interface ImpelGatewayPoolErrorOptions {
     code: ImpelGatewayPoolErrorCode;
+    /** @deprecated Pool errors expose a bounded code-derived message. */
     message: string;
     retryAfter?: number;
     model?: string;
     org?: string;
+    /** @deprecated Raw request metadata is intentionally not retained. */
     url?: string;
+    /** @deprecated Raw request metadata is intentionally not retained. */
     requestBodyValues?: unknown;
     statusCode?: number;
+    /** @deprecated Raw response metadata is intentionally not retained. */
     responseHeaders?: Record<string, string>;
+    /** @deprecated Raw response metadata is intentionally not retained. */
     responseBody?: string;
 }
 /**

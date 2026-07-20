@@ -53,14 +53,19 @@ export type ImpelGatewayPoolErrorCode =
 
 export interface ImpelGatewayPoolErrorOptions {
   code: ImpelGatewayPoolErrorCode;
+  /** @deprecated Pool errors expose a bounded code-derived message. */
   message: string;
   retryAfter?: number;
   model?: string;
   org?: string;
+  /** @deprecated Raw request metadata is intentionally not retained. */
   url?: string;
+  /** @deprecated Raw request metadata is intentionally not retained. */
   requestBodyValues?: unknown;
   statusCode?: number;
+  /** @deprecated Raw response metadata is intentionally not retained. */
   responseHeaders?: Record<string, string>;
+  /** @deprecated Raw response metadata is intentionally not retained. */
   responseBody?: string;
 }
 
@@ -84,12 +89,12 @@ export class ImpelGatewayPoolError extends APICallError {
   constructor(options: ImpelGatewayPoolErrorOptions) {
     const retryable = options.code !== "model_not_entitled";
     super({
-      message: options.message,
-      url: options.url ?? "",
-      requestBodyValues: options.requestBodyValues,
+      message: poolErrorMessage(options.code, options.model),
+      url: "",
+      requestBodyValues: undefined,
       statusCode: retryable ? options.statusCode : undefined,
-      responseHeaders: options.responseHeaders,
-      responseBody: options.responseBody,
+      responseHeaders: undefined,
+      responseBody: undefined,
       isRetryable: retryable,
     });
     this.name = "ImpelGatewayPoolError";
@@ -857,14 +862,24 @@ function mapGatewayPoolError(error: unknown, fallbackModel: string): unknown {
       retryAfter,
       model: details.model ?? fallbackModel,
       org: details.org,
-      url: apiError?.url,
-      requestBodyValues: apiError?.requestBodyValues,
       statusCode: apiError?.statusCode,
-      responseHeaders: apiError?.responseHeaders,
-      responseBody: apiError?.responseBody,
     });
   }
   return error;
+}
+
+function poolErrorMessage(
+  code: ImpelGatewayPoolErrorCode,
+  model: string | undefined,
+): string {
+  const suffix = model ? ` for model ${model}` : "";
+  if (code === "model_not_entitled") {
+    return `The organization is not entitled to use this model${suffix}.`;
+  }
+  if (code === "pool_rate_limited") {
+    return `The provider pool is temporarily rate limited${suffix}.`;
+  }
+  return `No provider capacity is currently available${suffix}.`;
 }
 
 function readPoolErrorDetails(value: unknown):
