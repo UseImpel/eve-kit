@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { inspect } from "node:util";
 import { APICallError } from "@ai-sdk/provider";
 import { ToolLoopAgent, tool } from "ai";
 import { z } from "zod";
@@ -550,11 +551,12 @@ test("fails clearly when gateway URL or credential is missing", async () => {
 });
 
 test("maps Anthropic model_not_entitled without retaining a retryable 502", async () => {
+  const sensitiveMarker = "person@example.com private-install-context";
   const body = {
     type: "error",
     error: {
       type: "model_not_entitled",
-      message: "no subscription seat",
+      message: `no subscription seat for ${sensitiveMarker}`,
       impel: { model: "claude-fable-5", orgId: "impel" },
     },
   };
@@ -565,7 +567,7 @@ test("maps Anthropic model_not_entitled without retaining a retryable 502", asyn
   });
 
   await assert.rejects(
-    () => model.doGenerate({ prompt: userPrompt("hello") }),
+    () => model.doGenerate({ prompt: userPrompt(sensitiveMarker) }),
     (error) => {
       assert.ok(error instanceof ImpelGatewayPoolError);
       assert.ok(APICallError.isInstance(error));
@@ -576,6 +578,11 @@ test("maps Anthropic model_not_entitled without retaining a retryable 502", asyn
       assert.equal(error.cause, undefined);
       assert.equal(error.model, "claude-fable-5");
       assert.equal(error.org, "impel");
+      assert.equal(error.requestBodyValues, undefined);
+      assert.equal(error.responseBody, undefined);
+      assert.equal(error.responseHeaders, undefined);
+      assert.equal(error.url, "");
+      assert.doesNotMatch(inspect(error, { depth: 10 }), /person@example\.com|private-install-context/);
       return true;
     },
   );

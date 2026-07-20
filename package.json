@@ -1,6 +1,6 @@
 {
   "name": "@useimpel/eve-kit",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Eve helpers and AI SDK provider for Impel gateway-backed agents.",
   "type": "module",
   "repository": {
