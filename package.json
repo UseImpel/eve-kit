@@ -1,6 +1,6 @@
 {
   "name": "@useimpel/eve-kit",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "description": "Eve helpers and AI SDK provider for Impel gateway-backed agents.",
   "type": "module",
   "repository": {
@@ -51,6 +51,10 @@
     "./eve/code-intelligence-tools": {
       "types": "./dist/eve/code-intelligence-tools.d.ts",
       "import": "./dist/eve/code-intelligence-tools.js"
+    },
+    "./eve/database-intelligence-tools": {
+      "types": "./dist/eve/database-intelligence-tools.d.ts",
+      "import": "./dist/eve/database-intelligence-tools.js"
     },
     "./eve/web-search-tool": {
       "types": "./dist/eve/web-search-tool.d.ts",
