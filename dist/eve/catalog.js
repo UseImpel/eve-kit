@@ -100,6 +100,27 @@ export const EVE_KIT_PROVIDERS = [
         sinceVersion: "1.1.0",
     },
     {
+        id: "database-intelligence-tools",
+        kind: "tool",
+        importPath: "@useimpel/eve-kit/eve/database-intelligence-tools",
+        exportName: "databaseIntelligenceTools",
+        summary: "Catalog-status, search, describe, relationship, and structural comparison tools backed by immutable multi-tenant database-schema snapshots. Tenant and snapshot identity come only from the signed Eve run assertion.",
+        envVars: [
+            {
+                name: "IMPEL_CODE_INTELLIGENCE_URL",
+                required: true,
+                sensitive: false,
+                purpose: "Base URL of the Impel intelligence public API service.",
+            },
+        ],
+        setupSteps: [
+            "Export only the desired named definitions as default files under the root agent/tools directory.",
+            "Use defaultImpelEveChannel() so the signed identity assertion is carried in server-only Eve session auth.",
+            "Allowlist the exact org/<orgId>/<agentId> target in DATABASE_INTELLIGENCE_RUNTIME_TARGETS on the service.",
+        ],
+        sinceVersion: "1.3.0",
+    },
+    {
         id: "whatsapp-channel",
         kind: "channel",
         importPath: "@useimpel/eve-kit/eve/whatsapp",

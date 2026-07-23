@@ -2,7 +2,7 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE, } from "./channel.js";
 import { RUN_TOKEN_HEADER } from "../contracts/run-token.js";
-const DEFAULT_CODE_INTELLIGENCE_URL = "https://code-intelligence.useimpel.ai";
+export const DEFAULT_CODE_INTELLIGENCE_URL = "https://code-intelligence.useimpel.ai";
 const repositorySelector = z
     .string()
     .min(1)
@@ -57,7 +57,7 @@ const diffImpactInput = z.object({
     maxDepth: z.number().int().min(1).max(10).default(3),
     limit: z.number().int().min(1).max(200).default(50),
 });
-function failure(code, message, retryable = false) {
+export function codeIntelligenceFailure(code, message, retryable = false) {
     return { ok: false, error: { code, message, retryable } };
 }
 function readString(value) {
@@ -79,7 +79,7 @@ const runtimeWorkspaceResponseSchema = z.object({
             .min(1),
     }),
 });
-function identityRunToken(ctx) {
+export function identityRunToken(ctx) {
     for (const principal of [
         ctx.session.auth.current,
         ctx.session.auth.initiator,
@@ -95,12 +95,12 @@ async function requestScope(ctx) {
     const token = identityRunToken(ctx);
     const baseUrl = process.env.IMPEL_CODE_INTELLIGENCE_URL?.trim() ??
         DEFAULT_CODE_INTELLIGENCE_URL;
-    const payload = await serviceRequest(baseUrl, token, "/v1/runtime/workspace", {}, 30_000);
-    if (isFailure(payload))
+    const payload = await signedIntelligenceRequest(baseUrl, token, "/v1/runtime/workspace", {}, 30_000);
+    if (isCodeIntelligenceFailure(payload))
         return payload;
     const parsed = runtimeWorkspaceResponseSchema.safeParse(payload);
     if (!parsed.success) {
-        return failure("backend_unavailable", "Code-intelligence returned an invalid runtime workspace.", true);
+        return codeIntelligenceFailure("backend_unavailable", "Code-intelligence returned an invalid runtime workspace.", true);
     }
     return {
         baseUrl,
@@ -126,7 +126,7 @@ function selectRepository(context, selector) {
 async function postCodeIntelligence(ctx, path, input, options = {}) {
     try {
         const scope = await requestScope(ctx);
-        if (isFailure(scope))
+        if (isCodeIntelligenceFailure(scope))
             return scope;
         const repository = options.workspaceOnly
             ? undefined
@@ -141,19 +141,19 @@ async function postCodeIntelligence(ctx, path, input, options = {}) {
                 : {}),
             ...input,
         };
-        return serviceRequest(scope.baseUrl, scope.token, path, body, 270_000);
+        return signedIntelligenceRequest(scope.baseUrl, scope.token, path, body, 270_000);
     }
     catch (error) {
-        return failure("invalid_request", error instanceof Error ? error.message : String(error));
+        return codeIntelligenceFailure("invalid_request", error instanceof Error ? error.message : String(error));
     }
 }
-function isFailure(value) {
+export function isCodeIntelligenceFailure(value) {
     return Boolean(value &&
         typeof value === "object" &&
         "ok" in value &&
         value.ok === false);
 }
-async function serviceRequest(baseUrl, token, path, body, timeoutMs) {
+export async function signedIntelligenceRequest(baseUrl, token, path, body, timeoutMs) {
     const response = await fetch(new URL(path, baseUrl), {
         method: "POST",
         headers: {
@@ -166,7 +166,7 @@ async function serviceRequest(baseUrl, token, path, body, timeoutMs) {
     const payload = await response.json().catch(() => null);
     if (payload !== null)
         return payload;
-    return failure("backend_unavailable", `Code-intelligence returned non-JSON HTTP ${response.status}.`, response.status >= 500);
+    return codeIntelligenceFailure("backend_unavailable", `Code-intelligence returned non-JSON HTTP ${response.status}.`, response.status >= 500);
 }
 export const codeWorkspaceStatusTool = defineTool({
     description: "Show the exact commits and available code-intelligence indexes attached to this run. Use this first when a code query reports that an index is still being built.",

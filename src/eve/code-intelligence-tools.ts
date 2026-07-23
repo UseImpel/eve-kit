@@ -6,7 +6,7 @@ import {
 } from "./channel.js";
 import { RUN_TOKEN_HEADER } from "../contracts/run-token.js";
 
-const DEFAULT_CODE_INTELLIGENCE_URL = "https://code-intelligence.useimpel.ai";
+export const DEFAULT_CODE_INTELLIGENCE_URL = "https://code-intelligence.useimpel.ai";
 
 const repositorySelector = z
   .string()
@@ -88,7 +88,7 @@ type CodeIntelligenceFailure = {
   };
 };
 
-function failure(
+export function codeIntelligenceFailure(
   code: string,
   message: string,
   retryable = false,
@@ -119,7 +119,7 @@ const runtimeWorkspaceResponseSchema = z.object({
   }),
 });
 
-function identityRunToken(ctx: ToolContext): string {
+export function identityRunToken(ctx: ToolContext): string {
   for (const principal of [
     ctx.session.auth.current,
     ctx.session.auth.initiator,
@@ -141,11 +141,11 @@ async function requestScope(ctx: ToolContext): Promise<RequestScope | CodeIntell
   const baseUrl =
     process.env.IMPEL_CODE_INTELLIGENCE_URL?.trim() ??
     DEFAULT_CODE_INTELLIGENCE_URL;
-  const payload = await serviceRequest(baseUrl, token, "/v1/runtime/workspace", {}, 30_000);
-  if (isFailure(payload)) return payload;
+  const payload = await signedIntelligenceRequest(baseUrl, token, "/v1/runtime/workspace", {}, 30_000);
+  if (isCodeIntelligenceFailure(payload)) return payload;
   const parsed = runtimeWorkspaceResponseSchema.safeParse(payload);
   if (!parsed.success) {
-    return failure(
+    return codeIntelligenceFailure(
       "backend_unavailable",
       "Code-intelligence returned an invalid runtime workspace.",
       true,
@@ -190,7 +190,7 @@ async function postCodeIntelligence(
 ): Promise<unknown> {
   try {
     const scope = await requestScope(ctx);
-    if (isFailure(scope)) return scope;
+    if (isCodeIntelligenceFailure(scope)) return scope;
     const repository = options.workspaceOnly
       ? undefined
       : selectRepository(scope.workspace, options.repository);
@@ -204,16 +204,16 @@ async function postCodeIntelligence(
         : {}),
       ...input,
     };
-    return serviceRequest(scope.baseUrl, scope.token, path, body, 270_000);
+    return signedIntelligenceRequest(scope.baseUrl, scope.token, path, body, 270_000);
   } catch (error) {
-    return failure(
+    return codeIntelligenceFailure(
       "invalid_request",
       error instanceof Error ? error.message : String(error),
     );
   }
 }
 
-function isFailure(value: unknown): value is CodeIntelligenceFailure {
+export function isCodeIntelligenceFailure(value: unknown): value is CodeIntelligenceFailure {
   return Boolean(
     value &&
       typeof value === "object" &&
@@ -222,7 +222,7 @@ function isFailure(value: unknown): value is CodeIntelligenceFailure {
   );
 }
 
-async function serviceRequest(
+export async function signedIntelligenceRequest(
   baseUrl: string,
   token: string,
   path: string,
@@ -240,7 +240,7 @@ async function serviceRequest(
   });
   const payload = await response.json().catch(() => null);
   if (payload !== null) return payload;
-  return failure(
+  return codeIntelligenceFailure(
     "backend_unavailable",
     `Code-intelligence returned non-JSON HTTP ${response.status}.`,
     response.status >= 500,

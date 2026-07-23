@@ -1,4 +1,17 @@
-import { type ToolDefinition } from "eve/tools";
+import { type ToolContext, type ToolDefinition } from "eve/tools";
+export declare const DEFAULT_CODE_INTELLIGENCE_URL = "https://code-intelligence.useimpel.ai";
+type CodeIntelligenceFailure = {
+    ok: false;
+    error: {
+        code: string;
+        message: string;
+        retryable: boolean;
+    };
+};
+export declare function codeIntelligenceFailure(code: string, message: string, retryable?: boolean): CodeIntelligenceFailure;
+export declare function identityRunToken(ctx: ToolContext): string;
+export declare function isCodeIntelligenceFailure(value: unknown): value is CodeIntelligenceFailure;
+export declare function signedIntelligenceRequest(baseUrl: string, token: string, path: string, body: Readonly<Record<string, unknown>>, timeoutMs: number): Promise<unknown>;
 export declare const codeWorkspaceStatusTool: ToolDefinition<Record<string, never>, unknown>;
 export declare const codeReadTool: ToolDefinition<{
     repository?: string | undefined;
@@ -67,4 +80,5 @@ export declare const codeIntelligenceTools: {
         limit: number;
     }, unknown>;
 };
+export {};
 //# sourceMappingURL=code-intelligence-tools.d.ts.map
