@@ -916,6 +916,14 @@ async function checkoutGitHubRepository(sandbox, repo, options) {
     await runSandboxCommand(sandbox, "create checkout directory", `mkdir -p ${shellQuote(path)}`);
     await runSandboxCommand(sandbox, "configure git safe directory", `git config --global --add safe.directory ${shellQuote(path)} || true`);
     await runSandboxCommand(sandbox, "initialize git repository", `cd ${shellQuote(path)} && git init`);
+    if (!options.sparsePaths) {
+        await runSandboxCommand(sandbox, "disable sparse checkout for full workspace", [
+            `cd ${shellQuote(path)}`,
+            "if git sparse-checkout list >/dev/null 2>&1; then",
+            "  git sparse-checkout disable",
+            "fi",
+        ].join("\n"));
+    }
     await runSandboxCommand(sandbox, "reset git remote", `cd ${shellQuote(path)} && git remote remove origin >/dev/null 2>&1 || true`);
     await runSandboxCommand(sandbox, "configure git remote", `cd ${shellQuote(path)} && git remote add origin ${shellQuote(remote)}`);
     if (options.sparsePaths) {

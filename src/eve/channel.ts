@@ -1474,6 +1474,18 @@ async function checkoutGitHubRepository(
     "initialize git repository",
     `cd ${shellQuote(path)} && git init`,
   );
+  if (!options.sparsePaths) {
+    await runSandboxCommand(
+      sandbox,
+      "disable sparse checkout for full workspace",
+      [
+        `cd ${shellQuote(path)}`,
+        "if git sparse-checkout list >/dev/null 2>&1; then",
+        "  git sparse-checkout disable",
+        "fi",
+      ].join("\n"),
+    );
+  }
   await runSandboxCommand(
     sandbox,
     "reset git remote",

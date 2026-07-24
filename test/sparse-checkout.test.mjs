@@ -66,6 +66,16 @@ test("partial sparse checkout materializes wiki but not raw and preserves exact 
       ])).trim(),
       "blob:none",
     );
+    await assert.rejects(
+      gitWithoutLazyFetch([
+        "-C",
+        sparseRoot,
+        "cat-file",
+        "-e",
+        "HEAD:raw/source.txt",
+      ]),
+      "excluded blobs must not be downloaded during sparse preparation",
+    );
     assert.equal(sparseState.workspace.repos[0].ref, fixture.sha);
     assert.equal(sparseState.workspace.repos[0].sha, fixture.sha);
     const marker = JSON.parse(
@@ -80,6 +90,39 @@ test("partial sparse checkout materializes wiki but not raw and preserves exact 
       sparseSandbox.commands.some((command) =>
         command.includes("git fetch --filter=blob:none"),
       ),
+    );
+
+    const transitionCommandIndex = sparseSandbox.commands.length;
+    await prepareImpelEveWorkspace(sparseState, {
+      getSandbox: async () => sparseSandbox,
+    });
+    assert.equal(
+      await readFile(join(sparseRoot, "raw", "source.txt"), "utf8"),
+      "large original\n",
+      "reusing a sparse single-repo sandbox for a full checkout restores excluded files",
+    );
+    assert.equal(
+      (await git([
+        "-C",
+        sparseRoot,
+        "config",
+        "--bool",
+        "core.sparseCheckout",
+      ])).trim(),
+      "false",
+    );
+    await gitWithoutLazyFetch([
+      "-C",
+      sparseRoot,
+      "cat-file",
+      "-e",
+      "HEAD:raw/source.txt",
+    ]);
+    assert.ok(
+      sparseSandbox.commands
+        .slice(transitionCommandIndex)
+        .some((command) => command.includes("git sparse-checkout disable")),
+      "the legacy full-checkout path must explicitly disable stale sparse state",
     );
 
     const fullRoot = join(fixture.root, "full-sandbox");
@@ -98,12 +141,11 @@ test("partial sparse checkout materializes wiki but not raw and preserves exact 
       "unconfigured repositories retain the full checkout behavior",
     );
     assert.equal(
-      fullSandbox.commands.some(
-        (command) =>
-          command.includes("sparse-checkout") ||
-          command.includes("--filter=blob:none"),
+      fullSandbox.commands.some((command) =>
+        command.includes("--filter=blob:none"),
       ),
       false,
+      "a fresh full checkout must not request partial-clone filtering",
     );
   } finally {
     if (previousToken === undefined) {
@@ -216,6 +258,15 @@ function resolveSandboxPath(root, path) {
 async function git(args) {
   const result = await execFileAsync("git", args, {
     encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+  });
+  return result.stdout;
+}
+
+async function gitWithoutLazyFetch(args) {
+  const result = await execFileAsync("git", args, {
+    encoding: "utf8",
+    env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
     maxBuffer: 1024 * 1024,
   });
   return result.stdout;
