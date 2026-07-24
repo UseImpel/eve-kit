@@ -116,6 +116,7 @@ export const EVE_KIT_PROVIDERS: readonly EveKitProvider[] = [
     setupSteps: [
       "Export it as the agent's channel, e.g. `export default defaultImpelEveChannel();` in agent/channels/impel.ts.",
       "If runs attach GitHub repos, provide one credential path: impel-identity (IMPEL_IDENTITY_URL + server-only v1 clientContext.identityRunToken), Vercel Connect, GitHub App env, or a static token.",
+      "For unusually large read-mostly repos, optionally pass attachedRepoSparsePaths keyed by owner/repo; values are safe cone-mode directory paths and enable partial blob fetch only for those repos.",
       "Optionally set EVE_APP_BASIC_USER/EVE_APP_BASIC_PASSWORD to add HTTP basic auth for non-OIDC callers.",
     ],
     sinceVersion: "0.2.0",

@@ -170,6 +170,47 @@ test("preserves channel state and explicit trusted Vercel subjects", () => {
   assert.deepEqual(channel.adapter.state, createImpelEveChannelState(null));
 });
 
+test("rejects unsafe attached repository sparse paths during channel construction", () => {
+  for (const path of [
+    "/wiki",
+    "../raw",
+    "wiki/../raw",
+    "wiki/*",
+    "wiki; rm -rf raw",
+    "wiki path",
+    "wiki\\nested",
+    ".git/objects",
+  ]) {
+    assert.throws(
+      () =>
+        defaultImpelEveChannel({
+          attachedRepoSparsePaths: {
+            "CreadorFund/impel-wiki": [path],
+          },
+        }),
+      /Invalid sparse checkout path/,
+      path,
+    );
+  }
+
+  assert.throws(
+    () =>
+      defaultImpelEveChannel({
+        attachedRepoSparsePaths: {
+          "CreadorFund/impel-wiki": [],
+        },
+      }),
+    /requires at least one path/,
+  );
+  assert.doesNotThrow(() =>
+    defaultImpelEveChannel({
+      attachedRepoSparsePaths: {
+        "CreadorFund/impel-wiki": ["wiki", ".github/workflows"],
+      },
+    }),
+  );
+});
+
 test("default Eve info route applies the configured auth policy", async () => {
   const channel = defaultImpelEveChannel({
     basicUser: "user",

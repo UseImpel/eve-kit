@@ -6,6 +6,21 @@ export interface DefaultImpelEveChannelOptions {
     includePlaceholderAuth?: boolean;
     prepareAttachedRepos?: boolean;
     checkoutDepth?: number;
+    /**
+     * Optional cone-mode sparse checkout paths keyed by attached GitHub
+     * repository (`owner/repo`, matched case-insensitively).
+     *
+     * Each path is a conservative, repository-relative directory path such as
+     * `wiki` or `docs/reference`. Configured repositories use Git partial fetch
+     * (`--filter=blob:none`) and materialize only those directories (plus Git's
+     * cone-mode parent/root files). Repositories not present in this map retain
+     * the existing full-checkout behavior.
+     *
+     * Globs and shell syntax are intentionally not supported. Supplying an
+     * absolute path, `.`/`..` segment, backslash, or shell metacharacter throws
+     * while the channel is constructed.
+     */
+    attachedRepoSparsePaths?: Readonly<Record<string, readonly string[]>>;
     trustedVercelSubjects?: readonly string[];
     /**
      * GitHub repositories (owner/repo) to broker *read-only* authenticated
@@ -88,6 +103,7 @@ export type ImpelEveChannelMetadata = Record<string, unknown> & ImpelEveRunConte
 };
 export interface PrepareImpelEveWorkspaceOptions {
     checkoutDepth?: number;
+    attachedRepoSparsePaths?: Readonly<Record<string, readonly string[]>>;
     referenceRepos?: readonly string[];
     getSandbox: () => Promise<SandboxSession>;
 }
@@ -104,7 +120,7 @@ export declare class ImpelIdentityResolveError extends Error {
 }
 export declare const IMPEL_IDENTITY_RUN_TOKEN_HEADER: "x-impel-identity-run-token";
 export declare const IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE: "impelIdentityRunToken";
-export declare function defaultImpelEveChannel({ basicUser, basicPassword, includePlaceholderAuth, prepareAttachedRepos, checkoutDepth, trustedVercelSubjects, referenceRepos, }?: DefaultImpelEveChannelOptions): ImpelEveChannel;
+export declare function defaultImpelEveChannel({ basicUser, basicPassword, includePlaceholderAuth, prepareAttachedRepos, checkoutDepth, attachedRepoSparsePaths, trustedVercelSubjects, referenceRepos, }?: DefaultImpelEveChannelOptions): ImpelEveChannel;
 export declare function createImpelEveChannelState(runContext: ImpelEveRunContext | null, workspaceAuth?: {
     identityRunToken?: string | null;
     /** @deprecated Accepted only for serialized pre-v1 state. */

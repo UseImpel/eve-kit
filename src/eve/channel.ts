@@ -27,6 +27,21 @@ export interface DefaultImpelEveChannelOptions {
   includePlaceholderAuth?: boolean;
   prepareAttachedRepos?: boolean;
   checkoutDepth?: number;
+  /**
+   * Optional cone-mode sparse checkout paths keyed by attached GitHub
+   * repository (`owner/repo`, matched case-insensitively).
+   *
+   * Each path is a conservative, repository-relative directory path such as
+   * `wiki` or `docs/reference`. Configured repositories use Git partial fetch
+   * (`--filter=blob:none`) and materialize only those directories (plus Git's
+   * cone-mode parent/root files). Repositories not present in this map retain
+   * the existing full-checkout behavior.
+   *
+   * Globs and shell syntax are intentionally not supported. Supplying an
+   * absolute path, `.`/`..` segment, backslash, or shell metacharacter throws
+   * while the channel is constructed.
+   */
+  attachedRepoSparsePaths?: Readonly<Record<string, readonly string[]>>;
   trustedVercelSubjects?: readonly string[];
   /**
    * GitHub repositories (owner/repo) to broker *read-only* authenticated
@@ -135,6 +150,7 @@ export type ImpelEveChannelMetadata = Record<string, unknown> &
 
 export interface PrepareImpelEveWorkspaceOptions {
   checkoutDepth?: number;
+  attachedRepoSparsePaths?: Readonly<Record<string, readonly string[]>>;
   referenceRepos?: readonly string[];
   getSandbox: () => Promise<SandboxSession>;
 }
@@ -206,9 +222,14 @@ export function defaultImpelEveChannel({
   includePlaceholderAuth = false,
   prepareAttachedRepos = true,
   checkoutDepth = readCheckoutDepthFromEnv(),
+  attachedRepoSparsePaths,
   trustedVercelSubjects,
   referenceRepos,
 }: DefaultImpelEveChannelOptions = {}): ImpelEveChannel {
+  // Validate static channel configuration immediately, rather than failing a
+  // user's first turn after the sandbox and GitHub token have been prepared.
+  const normalizedAttachedRepoSparsePaths =
+    normalizeAttachedRepoSparsePaths(attachedRepoSparsePaths);
   const basic =
     basicUser && basicPassword
       ? [httpBasic({ username: basicUser, password: basicPassword })]
@@ -261,6 +282,7 @@ export function defaultImpelEveChannel({
         if (!prepareAttachedRepos) return;
         await prepareImpelEveWorkspace(channel.state, {
           checkoutDepth,
+          attachedRepoSparsePaths: normalizedAttachedRepoSparsePaths,
           referenceRepos,
           getSandbox: () => ctx.getSandbox(),
         });
@@ -556,10 +578,14 @@ export async function prepareImpelEveWorkspace(
   const sandbox = await options.getSandbox();
   const checkoutPlan = createWorkspaceCheckoutPlan(runContext.repos);
   const checkoutDepth = options.checkoutDepth ?? readCheckoutDepthFromEnv();
+  const attachedRepoSparsePaths = normalizeAttachedRepoSparsePaths(
+    options.attachedRepoSparsePaths,
+  );
   const workspaceKey = createWorkspaceKey(runContext, {
     checkoutDepth,
     layout: checkoutPlan.layout,
     repos: checkoutPlan.repos,
+    attachedRepoSparsePaths,
   });
   if (
     state.workspace.prepared &&
@@ -592,6 +618,8 @@ export async function prepareImpelEveWorkspace(
           depth: checkoutDepth,
           path: planned.path,
           ref: impelEveCheckoutRef(runContext, planned.repo),
+          sparsePaths:
+            attachedRepoSparsePaths[planned.repo.toLowerCase()],
         },
       );
       prepared.push(checkout);
@@ -699,6 +727,78 @@ function normalizeReferenceRepos(
     if (trimmed) names.add(trimmed);
   }
   return Array.from(names);
+}
+
+function normalizeAttachedRepoSparsePaths(
+  value:
+    | Readonly<Record<string, readonly string[]>>
+    | undefined,
+): Readonly<Record<string, readonly string[]>> {
+  if (value === undefined) return {};
+  if (!isRecord(value)) {
+    throw new Error(
+      "attachedRepoSparsePaths must be an object keyed by GitHub owner/repo.",
+    );
+  }
+
+  const normalized: Record<string, readonly string[]> = {};
+  for (const [configuredRepo, configuredPaths] of Object.entries(value)) {
+    const repoName = configuredRepo.trim();
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repoName)) {
+      throw new Error(
+        `Invalid sparse checkout repository "${configuredRepo}". Expected owner/repo.`,
+      );
+    }
+    if (!Array.isArray(configuredPaths) || configuredPaths.length === 0) {
+      throw new Error(
+        `Sparse checkout for ${repoName} requires at least one path.`,
+      );
+    }
+    if (configuredPaths.length > 128) {
+      throw new Error(
+        `Sparse checkout for ${repoName} exceeds the 128-path limit.`,
+      );
+    }
+
+    const paths = new Set<string>();
+    for (const configuredPath of configuredPaths) {
+      if (typeof configuredPath !== "string") {
+        throw new Error(
+          `Invalid sparse checkout path for ${repoName}. Expected a string.`,
+        );
+      }
+      const path = configuredPath.trim();
+      const segments = path.split("/");
+      if (
+        path.length === 0 ||
+        path.length > 512 ||
+        path.startsWith("/") ||
+        path.includes("\\") ||
+        !/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/.test(path) ||
+        segments.some(
+          (segment) =>
+            segment === "." ||
+            segment === ".." ||
+            segment.toLowerCase() === ".git",
+        )
+      ) {
+        throw new Error(
+          `Invalid sparse checkout path "${configuredPath}" for ${repoName}. ` +
+            "Use repository-relative directory paths without '.', '..', globs, backslashes, or shell syntax.",
+        );
+      }
+      paths.add(path);
+    }
+
+    const key = repoName.toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(normalized, key)) {
+      throw new Error(
+        `Sparse checkout repository ${repoName} is configured more than once.`,
+      );
+    }
+    normalized[key] = Array.from(paths);
+  }
+  return normalized;
 }
 
 /**
@@ -1301,6 +1401,7 @@ function createWorkspaceKey(
     checkoutDepth: number;
     layout: ImpelWorkspaceLayout;
     repos: readonly WorkspaceRepoCheckout[];
+    attachedRepoSparsePaths: Readonly<Record<string, readonly string[]>>;
   },
 ): string {
   return JSON.stringify({
@@ -1311,6 +1412,7 @@ function createWorkspaceKey(
       path: repo.path,
       repo: repo.repo,
       ref: impelEveCheckoutRef(runContext, repo.repo),
+      sparsePaths: plan.attachedRepoSparsePaths[repo.repo.toLowerCase()],
     })),
   });
 }
@@ -1346,6 +1448,7 @@ async function checkoutGitHubRepository(
     depth: number;
     path: string;
     ref: string;
+    sparsePaths?: readonly string[];
   },
 ): Promise<ImpelPreparedRepo> {
   const path = sandbox.resolvePath(options.path);
@@ -1381,10 +1484,26 @@ async function checkoutGitHubRepository(
     "configure git remote",
     `cd ${shellQuote(path)} && git remote add origin ${shellQuote(remote)}`,
   );
+  if (options.sparsePaths) {
+    await runSandboxCommand(
+      sandbox,
+      "initialize sparse checkout",
+      `cd ${shellQuote(path)} && git sparse-checkout init --cone`,
+    );
+    await runSandboxCommand(
+      sandbox,
+      "configure sparse checkout paths",
+      [
+        `cd ${shellQuote(path)} && printf '%s\\n'`,
+        ...options.sparsePaths.map(shellQuote),
+        "| git sparse-checkout set --cone --stdin",
+      ].join(" "),
+    );
+  }
   await runSandboxCommand(
     sandbox,
     "fetch GitHub ref",
-    `cd ${shellQuote(path)} && GIT_TERMINAL_PROMPT=0 git fetch${depthFlag} origin ${shellQuote(ref)}`,
+    `cd ${shellQuote(path)} && GIT_TERMINAL_PROMPT=0 git fetch${depthFlag}${options.sparsePaths ? " --filter=blob:none" : ""} origin ${shellQuote(ref)}`,
   );
   await runSandboxCommand(
     sandbox,

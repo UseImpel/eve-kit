@@ -20,7 +20,10 @@ export const IMPEL_IDENTITY_RUN_TOKEN_HEADER = "x-impel-identity-run-token";
 export const IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE = "impelIdentityRunToken";
 export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_USER ??
     process.env.IMPEL_EVE_BASIC_USER, basicPassword = process.env.EVE_APP_BASIC_PASSWORD ??
-    process.env.IMPEL_EVE_BASIC_PASSWORD, includePlaceholderAuth = false, prepareAttachedRepos = true, checkoutDepth = readCheckoutDepthFromEnv(), trustedVercelSubjects, referenceRepos, } = {}) {
+    process.env.IMPEL_EVE_BASIC_PASSWORD, includePlaceholderAuth = false, prepareAttachedRepos = true, checkoutDepth = readCheckoutDepthFromEnv(), attachedRepoSparsePaths, trustedVercelSubjects, referenceRepos, } = {}) {
+    // Validate static channel configuration immediately, rather than failing a
+    // user's first turn after the sandbox and GitHub token have been prepared.
+    const normalizedAttachedRepoSparsePaths = normalizeAttachedRepoSparsePaths(attachedRepoSparsePaths);
     const basic = basicUser && basicPassword
         ? [httpBasic({ username: basicUser, password: basicPassword })]
         : [];
@@ -57,6 +60,7 @@ export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_U
                     return;
                 await prepareImpelEveWorkspace(channel.state, {
                     checkoutDepth,
+                    attachedRepoSparsePaths: normalizedAttachedRepoSparsePaths,
                     referenceRepos,
                     getSandbox: () => ctx.getSandbox(),
                 });
@@ -297,10 +301,12 @@ export async function prepareImpelEveWorkspace(state, options) {
     const sandbox = await options.getSandbox();
     const checkoutPlan = createWorkspaceCheckoutPlan(runContext.repos);
     const checkoutDepth = options.checkoutDepth ?? readCheckoutDepthFromEnv();
+    const attachedRepoSparsePaths = normalizeAttachedRepoSparsePaths(options.attachedRepoSparsePaths);
     const workspaceKey = createWorkspaceKey(runContext, {
         checkoutDepth,
         layout: checkoutPlan.layout,
         repos: checkoutPlan.repos,
+        attachedRepoSparsePaths,
     });
     if (state.workspace.prepared &&
         state.workspace.sandboxId === sandbox.id &&
@@ -325,6 +331,7 @@ export async function prepareImpelEveWorkspace(state, options) {
                 depth: checkoutDepth,
                 path: planned.path,
                 ref: impelEveCheckoutRef(runContext, planned.repo),
+                sparsePaths: attachedRepoSparsePaths[planned.repo.toLowerCase()],
             });
             prepared.push(checkout);
         }
@@ -414,6 +421,52 @@ function normalizeReferenceRepos(referenceRepos) {
             names.add(trimmed);
     }
     return Array.from(names);
+}
+function normalizeAttachedRepoSparsePaths(value) {
+    if (value === undefined)
+        return {};
+    if (!isRecord(value)) {
+        throw new Error("attachedRepoSparsePaths must be an object keyed by GitHub owner/repo.");
+    }
+    const normalized = {};
+    for (const [configuredRepo, configuredPaths] of Object.entries(value)) {
+        const repoName = configuredRepo.trim();
+        if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repoName)) {
+            throw new Error(`Invalid sparse checkout repository "${configuredRepo}". Expected owner/repo.`);
+        }
+        if (!Array.isArray(configuredPaths) || configuredPaths.length === 0) {
+            throw new Error(`Sparse checkout for ${repoName} requires at least one path.`);
+        }
+        if (configuredPaths.length > 128) {
+            throw new Error(`Sparse checkout for ${repoName} exceeds the 128-path limit.`);
+        }
+        const paths = new Set();
+        for (const configuredPath of configuredPaths) {
+            if (typeof configuredPath !== "string") {
+                throw new Error(`Invalid sparse checkout path for ${repoName}. Expected a string.`);
+            }
+            const path = configuredPath.trim();
+            const segments = path.split("/");
+            if (path.length === 0 ||
+                path.length > 512 ||
+                path.startsWith("/") ||
+                path.includes("\\") ||
+                !/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/.test(path) ||
+                segments.some((segment) => segment === "." ||
+                    segment === ".." ||
+                    segment.toLowerCase() === ".git")) {
+                throw new Error(`Invalid sparse checkout path "${configuredPath}" for ${repoName}. ` +
+                    "Use repository-relative directory paths without '.', '..', globs, backslashes, or shell syntax.");
+            }
+            paths.add(path);
+        }
+        const key = repoName.toLowerCase();
+        if (Object.prototype.hasOwnProperty.call(normalized, key)) {
+            throw new Error(`Sparse checkout repository ${repoName} is configured more than once.`);
+        }
+        normalized[key] = Array.from(paths);
+    }
+    return normalized;
 }
 /**
  * Broker read-only, authenticated GitHub access to a fixed set of reference
@@ -838,6 +891,7 @@ function createWorkspaceKey(runContext, plan) {
             path: repo.path,
             repo: repo.repo,
             ref: impelEveCheckoutRef(runContext, repo.repo),
+            sparsePaths: plan.attachedRepoSparsePaths[repo.repo.toLowerCase()],
         })),
     });
 }
@@ -864,7 +918,15 @@ async function checkoutGitHubRepository(sandbox, repo, options) {
     await runSandboxCommand(sandbox, "initialize git repository", `cd ${shellQuote(path)} && git init`);
     await runSandboxCommand(sandbox, "reset git remote", `cd ${shellQuote(path)} && git remote remove origin >/dev/null 2>&1 || true`);
     await runSandboxCommand(sandbox, "configure git remote", `cd ${shellQuote(path)} && git remote add origin ${shellQuote(remote)}`);
-    await runSandboxCommand(sandbox, "fetch GitHub ref", `cd ${shellQuote(path)} && GIT_TERMINAL_PROMPT=0 git fetch${depthFlag} origin ${shellQuote(ref)}`);
+    if (options.sparsePaths) {
+        await runSandboxCommand(sandbox, "initialize sparse checkout", `cd ${shellQuote(path)} && git sparse-checkout init --cone`);
+        await runSandboxCommand(sandbox, "configure sparse checkout paths", [
+            `cd ${shellQuote(path)} && printf '%s\\n'`,
+            ...options.sparsePaths.map(shellQuote),
+            "| git sparse-checkout set --cone --stdin",
+        ].join(" "));
+    }
+    await runSandboxCommand(sandbox, "fetch GitHub ref", `cd ${shellQuote(path)} && GIT_TERMINAL_PROMPT=0 git fetch${depthFlag}${options.sparsePaths ? " --filter=blob:none" : ""} origin ${shellQuote(ref)}`);
     await runSandboxCommand(sandbox, "checkout GitHub ref", `cd ${shellQuote(path)} && git checkout --detach -f FETCH_HEAD`);
     const head = await runSandboxCommand(sandbox, "resolve checked out commit", `cd ${shellQuote(path)} && git rev-parse HEAD`);
     return {

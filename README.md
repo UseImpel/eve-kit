@@ -190,4 +190,23 @@ inputs; it never supplies tenant identity, workspace identity, or credentials.
 so standard clients, evals, and deployment probes can discover agent
 capabilities without a parallel transport.
 
+Large attached repositories can opt into a per-repository partial sparse
+checkout. Paths use Git's cone-mode directory semantics (not globs), are matched
+to repository names case-insensitively, and leave every unconfigured repository
+on the existing full-checkout path:
+
+```ts
+export default defaultImpelEveChannel({
+  attachedRepoSparsePaths: {
+    "CreadorFund/impel-wiki": ["wiki"],
+  },
+});
+```
+
+This uses `git fetch --filter=blob:none` and materializes `wiki/**` plus the
+root/parent files included by cone mode; sibling trees such as `raw/**` remain
+outside the worktree. Values must be repository-relative directory paths.
+Absolute paths, `.`/`..`, backslashes, globs, and shell metacharacters are
+rejected when the channel is constructed.
+
 See [MIGRATION.md](./MIGRATION.md) for the v1 cutover checklist.
