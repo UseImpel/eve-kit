@@ -10,6 +10,7 @@
   "publishConfig": {
     "access": "public"
   },
+  "packageManager": "pnpm@11.17.0",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
@@ -124,11 +125,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "postbuild": "node --input-type=module -e \"import { chmodSync } from 'node:fs'; chmodSync('dist/bin/eve-kit-smoke-deployed.js', 0o755)\"",
-    "check": "npm run build && npm run typecheck:pilot:gateway:eve && npm test",
+    "check": "pnpm run build && pnpm run typecheck:pilot:gateway:eve && pnpm test",
     "pilot:gateway": "node scripts/pilot-gateway.mjs",
-    "pilot:gateway:eve": "npm run prepare:pilot:gateway:eve && cd fixtures/gateway-pilot-eve && eve eval gateway-pilot --strict --skip-report --max-concurrency 1",
+    "pilot:gateway:eve": "pnpm run prepare:pilot:gateway:eve && cd fixtures/gateway-pilot-eve && eve eval gateway-pilot --strict --skip-report --max-concurrency 1",
     "prepare:pilot:gateway:eve": "node scripts/prepare-pilot-gateway-eve.mjs",
-    "typecheck:pilot:gateway:eve": "npm run prepare:pilot:gateway:eve && tsc -p fixtures/gateway-pilot-eve/tsconfig.json",
+    "typecheck:pilot:gateway:eve": "pnpm run prepare:pilot:gateway:eve && tsc -p fixtures/gateway-pilot-eve/tsconfig.json",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
@@ -153,11 +154,11 @@
     }
   },
   "devDependencies": {
-    "@types/node": "26.1.1",
+    "@types/node": "catalog:",
     "braintrust": "3.21.0",
     "eve": "0.22.1",
     "just-bash": "3.1.0",
-    "typescript": "7.0.2"
+    "typescript": "catalog:"
   },
   "engines": {
     "node": ">=24"
