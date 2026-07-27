@@ -144,7 +144,7 @@ policy, hooks, and structured output. There is no implicit CLI fallback.
 ## Acceptance pilots
 
 With `IMPEL_GATEWAY_URL` and `IMPEL_GATEWAY_TOKEN` set, run the transport-level
-AI SDK probe with `npm run pilot:gateway`. Run `npm run pilot:gateway:eve` for
+AI SDK probe with `pnpm run pilot:gateway`. Run `pnpm run pilot:gateway:eve` for
 the framework-level acceptance check: it boots a real Eve app, executes the
 side-effect-free `echo_probe` tool, requires structured `final_output`, and
 asserts the emitted `result.completed` event. Override its default model with

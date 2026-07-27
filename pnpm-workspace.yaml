@@ -1,0 +1,12 @@
+packages:
+  - '.'
+
+allowBuilds:
+  '@mongodb-js/zstd': true
+  braintrust: true
+  esbuild: true
+  node-liblzma: true
+
+catalog:
+  typescript: 7.0.2
+  '@types/node': 26.1.1

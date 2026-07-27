@@ -37,10 +37,14 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      - name: Enable Corepack
+        run: corepack enable
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: pnpm
 
       - name: Resolve and verify release metadata
         id: meta
@@ -56,14 +60,14 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Build & test from a clean dist/
         # Rebuilding from an empty directory catches stale committed modules
         # whose source was removed as well as newly generated outputs.
         run: |
           rm -rf dist
-          npm run check
+          pnpm run check
           chmod +x dist/bin/eve-kit-smoke-deployed.js
 
       - name: Verify committed dist/ matches a fresh build
@@ -76,7 +80,7 @@ jobs:
           if [ -z "$DIST_STATUS" ]; then
             echo "dist/ is in sync with source for this tag."
           else
-            echo "::error title=dist drift::Committed dist/ does not match a fresh build for this tag. Rebuild (npm run build), commit dist/, and re-tag — consumers install the tarball as-is."
+            echo "::error title=dist drift::Committed dist/ does not match a fresh build for this tag. Rebuild (pnpm run build), commit dist/, and re-tag — consumers install the tarball as-is."
             echo "$DIST_STATUS"
             git diff --stat -- dist
             git diff -- dist

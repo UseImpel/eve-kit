@@ -13,7 +13,7 @@ test("publish workflow blocks tag/version mismatch and every kind of dist drift"
   assert.match(workflow, /tag\/version mismatch/);
   assert.match(
     workflow,
-    /rm -rf dist[\s\S]*?npm run check[\s\S]*?chmod \+x dist\/bin\/eve-kit-smoke-deployed\.js/,
+    /rm -rf dist[\s\S]*?pnpm run check[\s\S]*?chmod \+x dist\/bin\/eve-kit-smoke-deployed\.js/,
   );
   assert.match(
     workflow,
