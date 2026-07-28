@@ -1,4 +1,4 @@
-import { APICallError, type LanguageModelV4, type LanguageModelV4CallOptions, type LanguageModelV4StreamResult, type SharedV4ProviderOptions } from "@ai-sdk/provider";
+import { APICallError, type LanguageModelV4, type LanguageModelV4CallOptions, type LanguageModelV4GenerateResult, type LanguageModelV4StreamResult, type SharedV4ProviderOptions } from "@ai-sdk/provider";
 export type ImpelGatewayProvider = "anthropic" | "openai";
 export interface ImpelGatewayRunContext {
     orgId?: string;
@@ -100,7 +100,7 @@ export declare class ImpelGatewayLanguageModel implements LanguageModelV4 {
     static [WORKFLOW_SERIALIZE](model: ImpelGatewayLanguageModel): SerializedImpelGatewayModel;
     static [WORKFLOW_DESERIALIZE](serialized: SerializedImpelGatewayModel): ImpelGatewayLanguageModel;
     constructor(modelId: string, options?: ImpelGatewayModelOptions);
-    doGenerate(callOptions: LanguageModelV4CallOptions): Promise<import("@ai-sdk/provider").LanguageModelV4GenerateResult>;
+    doGenerate(callOptions: LanguageModelV4CallOptions): Promise<LanguageModelV4GenerateResult>;
     doStream(callOptions: LanguageModelV4CallOptions): Promise<LanguageModelV4StreamResult>;
     private buildCall;
 }

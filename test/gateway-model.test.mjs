@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { inspect } from "node:util";
 import { APICallError } from "@ai-sdk/provider";
-import { ToolLoopAgent, tool } from "ai";
+import { generateText, ToolLoopAgent, tool } from "ai";
 import { z } from "zod";
 import {
   ImpelGatewayPoolError,
@@ -133,7 +133,7 @@ test("Anthropic uses the native Messages path, bearer auth, and preserves tools/
 
 test("OpenAI uses Responses, forces store:false, and replays encrypted reasoning", async () => {
   const requests = [];
-  const fetch = recordingFetch(requests, () => openAIResponse());
+  const fetch = recordingFetch(requests, () => openAIStreamResponse());
   const model = impelGatewayModel("gpt-5.5", {
     ...baseOptions(fetch),
     headers: {
@@ -144,7 +144,7 @@ test("OpenAI uses Responses, forces store:false, and replays encrypted reasoning
     providerOptions: { openai: { store: true, reasoningEffort: "high" } },
   });
 
-  await model.doGenerate({
+  const result = await model.doGenerate({
     prompt: [
       {
         role: "assistant",
@@ -192,6 +192,7 @@ test("OpenAI uses Responses, forces store:false, and replays encrypted reasoning
   assert.equal(requests[0].headers.get("x-api-key"), null);
   assert.equal(requests[0].headers.get("traceparent"), "call-trace");
   assert.equal(requests[0].body.model, "gpt-5.5");
+  assert.equal(requests[0].body.stream, true);
   assert.equal(requests[0].body.store, false);
   assert.ok(requests[0].body.include.includes("reasoning.encrypted_content"));
   assert.equal(requests[0].body.tools[0].name, "lookup");
@@ -208,6 +209,36 @@ test("OpenAI uses Responses, forces store:false, and replays encrypted reasoning
       ],
     },
   );
+  assert.equal(
+    result.content.find((part) => part.type === "text")?.text,
+    "ready",
+  );
+  assert.equal(result.finishReason.unified, "stop");
+  assert.equal(result.usage.inputTokens.total, 1);
+  assert.equal(result.response?.id, "resp_stream");
+});
+
+test("generateText works against a Codex backend that requires streaming", async () => {
+  const requests = [];
+  const fetch = recordingFetch(requests, () => {
+    const request = requests.at(-1);
+    return request?.body.stream === true
+      ? openAIStreamResponse()
+      : Response.json(
+          { detail: "Stream must be set to true" },
+          { status: 400 },
+        );
+  });
+  const model = impelGatewayModel("gpt-5.6-sol", baseOptions(fetch));
+
+  const result = await generateText({
+    model,
+    prompt: "Summarize the conversation.",
+  });
+
+  assert.equal(result.text, "ready");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].body.stream, true);
 });
 
 test("resolves auth in the documented order and scrubs a packed prompt token", async () => {
@@ -781,7 +812,7 @@ test("compatibility shims preserve provider options on gateway-native v4 models"
     },
   });
   const codex = createImpelCodexModel({
-    ...baseOptions(recordingFetch(codexRequests, () => openAIResponse())),
+    ...baseOptions(recordingFetch(codexRequests, () => openAIStreamResponse())),
     modelId: "gpt-5.5",
     effort: "high",
     providerOptions: {
@@ -815,6 +846,7 @@ test("compatibility shims preserve provider options on gateway-native v4 models"
   assert.equal(codexRequests[0].body.reasoning.effort, "low");
   assert.equal(codexRequests[0].body.text.verbosity, "high");
   assert.equal(codexRequests[0].body.store, false);
+  assert.equal(codexRequests[0].body.stream, true);
   assert.equal("approvalMode" in codexRequests[0].body, false);
 });
 
@@ -961,36 +993,6 @@ function anthropicResponse(
   });
 }
 
-function openAIResponse() {
-  return Response.json({
-    id: "resp_test",
-    created_at: 1_700_000_000,
-    model: "gpt-5.5",
-    output: [
-      {
-        type: "message",
-        role: "assistant",
-        id: "msg_test",
-        phase: "final_answer",
-        content: [
-          {
-            type: "output_text",
-            text: "ready",
-            logprobs: [],
-            annotations: [],
-          },
-        ],
-      },
-    ],
-    usage: {
-      input_tokens: 1,
-      input_tokens_details: { cached_tokens: 0 },
-      output_tokens: 1,
-      output_tokens_details: { reasoning_tokens: 0 },
-    },
-  });
-}
-
 function anthropicStreamResponse(text) {
   return eventStreamResponse([
     {
@@ -1053,13 +1055,37 @@ function openAIStreamResponse() {
       },
     },
     {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: "msg_stream",
+        phase: "final_answer",
+      },
+    },
+    {
+      type: "response.output_text.delta",
+      item_id: "msg_stream",
+      delta: "ready",
+      logprobs: [],
+    },
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: "msg_stream",
+        phase: "final_answer",
+      },
+    },
+    {
       type: "response.completed",
       response: {
         incomplete_details: null,
         usage: {
           input_tokens: 1,
           input_tokens_details: { cached_tokens: 0 },
-          output_tokens: 0,
+          output_tokens: 1,
           output_tokens_details: { reasoning_tokens: 0 },
         },
         service_tier: null,
