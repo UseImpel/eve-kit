@@ -4,9 +4,13 @@ import {
   APICallError,
   type LanguageModelV4,
   type LanguageModelV4CallOptions,
+  type LanguageModelV4Content,
+  type LanguageModelV4GenerateResult,
   type LanguageModelV4StreamPart,
   type LanguageModelV4StreamResult,
+  type SharedV4ProviderMetadata,
   type SharedV4ProviderOptions,
+  type SharedV4Warning,
 } from "@ai-sdk/provider";
 
 type JsonObject = Record<string, unknown>;
@@ -250,9 +254,18 @@ export class ImpelGatewayLanguageModel implements LanguageModelV4 {
     this.supportedUrls = probe.supportedUrls;
   }
 
-  async doGenerate(callOptions: LanguageModelV4CallOptions) {
+  async doGenerate(
+    callOptions: LanguageModelV4CallOptions,
+  ): Promise<LanguageModelV4GenerateResult> {
     const { inner, options: prepared } = await this.buildCall(callOptions);
     try {
+      // ChatGPT's Codex Responses backend requires stream:true even when the
+      // AI SDK caller uses generateText()/doGenerate(). Preserve the standard
+      // LanguageModelV4 contract by consuming the provider stream internally
+      // and returning the same aggregate shape as a native doGenerate call.
+      if (this.resolved.provider === "openai") {
+        return await aggregateStreamResult(await inner.doStream(prepared));
+      }
       return await inner.doGenerate(prepared);
     } catch (error) {
       throw mapGatewayError(error, this.resolved.modelId);
@@ -299,6 +312,155 @@ export class ImpelGatewayLanguageModel implements LanguageModelV4 {
       ),
     };
   }
+}
+
+async function aggregateStreamResult(
+  result: LanguageModelV4StreamResult,
+): Promise<LanguageModelV4GenerateResult> {
+  const content: LanguageModelV4Content[] = [];
+  const textIndices = new Map<string, number>();
+  const reasoningIndices = new Map<string, number>();
+  let warnings: SharedV4Warning[] = [];
+  let responseMetadata: NonNullable<
+    LanguageModelV4GenerateResult["response"]
+  > = {};
+  let finish: Extract<LanguageModelV4StreamPart, { type: "finish" }> | undefined;
+
+  for await (const part of result.stream) {
+    switch (part.type) {
+      case "stream-start":
+        warnings = part.warnings;
+        break;
+      case "response-metadata": {
+        const { type: _type, ...metadata } = part;
+        responseMetadata = { ...responseMetadata, ...metadata };
+        break;
+      }
+      case "text-start": {
+        textIndices.set(part.id, content.length);
+        content.push({
+          type: "text",
+          text: "",
+          providerMetadata: part.providerMetadata,
+        });
+        break;
+      }
+      case "text-delta": {
+        const index = ensureTextContent(
+          content,
+          textIndices,
+          part.id,
+          part.providerMetadata,
+        );
+        const current = content[index];
+        if (current?.type === "text") current.text += part.delta;
+        break;
+      }
+      case "text-end": {
+        const index = textIndices.get(part.id);
+        const current = index === undefined ? undefined : content[index];
+        if (current?.type === "text" && part.providerMetadata !== undefined) {
+          current.providerMetadata = part.providerMetadata;
+        }
+        break;
+      }
+      case "reasoning-start": {
+        reasoningIndices.set(part.id, content.length);
+        content.push({
+          type: "reasoning",
+          text: "",
+          providerMetadata: part.providerMetadata,
+        });
+        break;
+      }
+      case "reasoning-delta": {
+        const index = ensureReasoningContent(
+          content,
+          reasoningIndices,
+          part.id,
+          part.providerMetadata,
+        );
+        const current = content[index];
+        if (current?.type === "reasoning") current.text += part.delta;
+        break;
+      }
+      case "reasoning-end": {
+        const index = reasoningIndices.get(part.id);
+        const current = index === undefined ? undefined : content[index];
+        if (
+          current?.type === "reasoning" &&
+          part.providerMetadata !== undefined
+        ) {
+          current.providerMetadata = part.providerMetadata;
+        }
+        break;
+      }
+      case "tool-call":
+      case "tool-result":
+      case "tool-approval-request":
+      case "custom":
+      case "file":
+      case "reasoning-file":
+      case "source":
+        content.push(part);
+        break;
+      case "finish":
+        finish = part;
+        break;
+      case "error":
+        throw part.error;
+      case "tool-input-start":
+      case "tool-input-delta":
+      case "tool-input-end":
+      case "raw":
+        break;
+    }
+  }
+
+  if (!finish) {
+    throw new Error("Gateway model stream ended without a finish event.");
+  }
+
+  return {
+    content,
+    finishReason: finish.finishReason,
+    usage: finish.usage,
+    providerMetadata: finish.providerMetadata,
+    request: result.request,
+    response: {
+      ...responseMetadata,
+      headers: result.response?.headers,
+    },
+    warnings,
+  };
+}
+
+function ensureTextContent(
+  content: LanguageModelV4Content[],
+  indices: Map<string, number>,
+  id: string,
+  providerMetadata: SharedV4ProviderMetadata | undefined,
+): number {
+  const existing = indices.get(id);
+  if (existing !== undefined) return existing;
+  const index = content.length;
+  indices.set(id, index);
+  content.push({ type: "text", text: "", providerMetadata });
+  return index;
+}
+
+function ensureReasoningContent(
+  content: LanguageModelV4Content[],
+  indices: Map<string, number>,
+  id: string,
+  providerMetadata: SharedV4ProviderMetadata | undefined,
+): number {
+  const existing = indices.get(id);
+  if (existing !== undefined) return existing;
+  const index = content.length;
+  indices.set(id, index);
+  content.push({ type: "reasoning", text: "", providerMetadata });
+  return index;
 }
 
 export function impelGatewayClaudeModel(

@@ -10,7 +10,7 @@ account and performs one Anthropic Messages or OpenAI Responses model turn.
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v1.2.2.tar.gz
+npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v1.3.1.tar.gz
 ```
 
 ## Eve usage
@@ -42,7 +42,10 @@ const codex = impelGatewayModel("gpt-5.5");
 Claude IDs route through `${IMPEL_GATEWAY_URL}/anthropic/v1/messages` with
 `@ai-sdk/anthropic`. GPT, o-series, and Codex IDs route through
 `${IMPEL_GATEWAY_URL}/v1/responses` with `@ai-sdk/openai`; Responses requests
-always set `store: false` so encrypted reasoning can be replayed by Eve.
+always set `store: false` so encrypted reasoning can be replayed by Eve. Codex
+requires streaming upstream, so eve-kit also fulfills non-streaming AI SDK calls
+such as `generateText()` by consuming that stream and returning an aggregated
+generate result.
 
 The aliases are:
 
