@@ -105,6 +105,44 @@ test("normalizes and extracts Eve run context without consuming requests", async
   assert.equal(await request.text(), body);
 });
 
+test("preserves a validated OpenReview target without exposing capabilities", () => {
+  assert.deepEqual(
+    normalizeImpelEveRunContext({
+      orgId: "impel",
+      runToken: "v2.gateway.payload",
+      identityRunToken: "v1.identity.payload",
+      reviewTarget: {
+        repoFullName: "UseImpel/openreview",
+        pullRequestNumber: 42,
+        triggerCommentId: 99,
+        headSha: "a".repeat(40),
+        headRef: "feature/review",
+        baseSha: "b".repeat(40),
+        baseRef: "main",
+      },
+    }),
+    {
+      orgId: "impel",
+      reviewTarget: {
+        repoFullName: "UseImpel/openreview",
+        pullRequestNumber: 42,
+        triggerCommentId: 99,
+        headSha: "a".repeat(40),
+        headRef: "feature/review",
+        baseSha: "b".repeat(40),
+        baseRef: "main",
+      },
+    },
+  );
+
+  assert.equal(
+    normalizeImpelEveRunContext({
+      reviewTarget: { repoFullName: "invalid", pullRequestNumber: 0 },
+    })?.reviewTarget,
+    undefined,
+  );
+});
+
 test("normalizes exact code-intelligence context and pins matching checkouts", () => {
   const context = normalizeImpelEveRunContext({
     orgId: "impel",

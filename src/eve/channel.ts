@@ -4,6 +4,7 @@ import {
   GET,
   POST,
   type Channel,
+  type ChannelEvents,
   type HttpRouteDefinition,
   type RouteHandlerArgs,
   type SendOptions,
@@ -41,6 +42,8 @@ export interface DefaultImpelEveChannelOptions {
    * default (open) networking and no GitHub auth.
    */
   referenceRepos?: readonly string[];
+  /** Additional HTTP-session lifecycle handlers for a managed Eve app. */
+  events?: ChannelEvents<ImpelEveChannelContext>;
 }
 
 export interface ImpelEveRunContext {
@@ -49,6 +52,8 @@ export interface ImpelEveRunContext {
   branch?: string;
   installationId?: string | number;
   githubConnectorUid?: string;
+  /** Non-secret PR metadata used by the OpenReview session lifecycle. */
+  reviewTarget?: ImpelOpenReviewTarget;
   runId?: string;
   traceId?: string;
   agent?: Record<string, unknown>;
@@ -64,6 +69,16 @@ export interface ImpelEveRunContext {
     agentId: string;
     files: Array<{ path: string; content: string; enc?: "utf8" | "base64" }>;
   };
+}
+
+export interface ImpelOpenReviewTarget {
+  repoFullName: string;
+  pullRequestNumber: number;
+  triggerCommentId: number;
+  headSha: string;
+  headRef: string;
+  baseSha: string;
+  baseRef: string;
 }
 
 export interface ImpelCodeIntelligenceRepository {
@@ -208,6 +223,7 @@ export function defaultImpelEveChannel({
   checkoutDepth = readCheckoutDepthFromEnv(),
   trustedVercelSubjects,
   referenceRepos,
+  events,
 }: DefaultImpelEveChannelOptions = {}): ImpelEveChannel {
   const basic =
     basicUser && basicPassword
@@ -257,13 +273,16 @@ export function defaultImpelEveChannel({
     },
     routes: createImpelEveRoutes(auth),
     events: {
-      async "turn.started"(_event, channel, ctx) {
-        if (!prepareAttachedRepos) return;
-        await prepareImpelEveWorkspace(channel.state, {
-          checkoutDepth,
-          referenceRepos,
-          getSandbox: () => ctx.getSandbox(),
-        });
+      ...events,
+      async "turn.started"(event, channel, ctx) {
+        if (prepareAttachedRepos) {
+          await prepareImpelEveWorkspace(channel.state, {
+            checkoutDepth,
+            referenceRepos,
+            getSandbox: () => ctx.getSandbox(),
+          });
+        }
+        await events?.["turn.started"]?.(event, channel, ctx);
       },
     },
   });
@@ -420,6 +439,7 @@ export function normalizeImpelEveRunContext(
         ? value.installationId
         : undefined,
     githubConnectorUid: readString(value.githubConnectorUid),
+    reviewTarget: parseOpenReviewTarget(value.reviewTarget),
     runId: readString(value.runId),
     traceId: readString(value.traceId),
     agent: isRecord(value.agent) ? value.agent : undefined,
@@ -427,6 +447,47 @@ export function normalizeImpelEveRunContext(
     codeIntelligence: parseCodeIntelligenceContext(value.codeIntelligence),
     workspaceSeed: parseWorkspaceSeed(value.workspaceSeed),
   });
+}
+
+function parseOpenReviewTarget(value: unknown): ImpelOpenReviewTarget | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const repoFullName = readString(value.repoFullName);
+  const headSha = readString(value.headSha)?.toLowerCase();
+  const headRef = readString(value.headRef);
+  const baseSha = readString(value.baseSha)?.toLowerCase();
+  const baseRef = readString(value.baseRef);
+  const pullRequestNumber = value.pullRequestNumber;
+  const triggerCommentId = value.triggerCommentId;
+
+  if (
+    !repoFullName ||
+    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repoFullName) ||
+    !headSha ||
+    !/^[a-f0-9]{40,64}$/u.test(headSha) ||
+    !headRef ||
+    !baseSha ||
+    !/^[a-f0-9]{40,64}$/u.test(baseSha) ||
+    !baseRef ||
+    typeof pullRequestNumber !== "number" ||
+    !Number.isSafeInteger(pullRequestNumber) ||
+    pullRequestNumber <= 0 ||
+    typeof triggerCommentId !== "number" ||
+    !Number.isSafeInteger(triggerCommentId) ||
+    triggerCommentId <= 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    repoFullName,
+    pullRequestNumber,
+    triggerCommentId,
+    headSha,
+    headRef,
+    baseSha,
+    baseRef,
+  };
 }
 
 function parseCodeIntelligenceContext(
