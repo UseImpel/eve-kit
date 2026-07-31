@@ -1,4 +1,4 @@
-import { type Channel } from "eve/channels";
+import { type Channel, type ChannelEvents } from "eve/channels";
 import type { SandboxSession } from "eve/sandbox";
 export interface DefaultImpelEveChannelOptions {
     basicUser?: string;
@@ -20,6 +20,8 @@ export interface DefaultImpelEveChannelOptions {
      * default (open) networking and no GitHub auth.
      */
     referenceRepos?: readonly string[];
+    /** Additional HTTP-session lifecycle handlers for a managed Eve app. */
+    events?: ChannelEvents<ImpelEveChannelContext>;
 }
 export interface ImpelEveRunContext {
     orgId?: string;
@@ -27,6 +29,8 @@ export interface ImpelEveRunContext {
     branch?: string;
     installationId?: string | number;
     githubConnectorUid?: string;
+    /** Non-secret PR metadata used by the OpenReview session lifecycle. */
+    reviewTarget?: ImpelOpenReviewTarget;
     runId?: string;
     traceId?: string;
     agent?: Record<string, unknown>;
@@ -40,6 +44,15 @@ export interface ImpelEveRunContext {
             enc?: "utf8" | "base64";
         }>;
     };
+}
+export interface ImpelOpenReviewTarget {
+    repoFullName: string;
+    pullRequestNumber: number;
+    triggerCommentId: number;
+    headSha: string;
+    headRef: string;
+    baseSha: string;
+    baseRef: string;
 }
 export interface ImpelCodeIntelligenceRepository {
     provider: "github";
@@ -82,6 +95,9 @@ export interface ImpelEveChannelState {
         error: string | null;
     };
 }
+type ImpelEveChannelContext = {
+    state: ImpelEveChannelState;
+};
 export type ImpelEveChannel = Channel<ImpelEveChannelState, Record<string, never>, ImpelEveChannelMetadata>;
 export type ImpelEveChannelMetadata = Record<string, unknown> & ImpelEveRunContext & {
     workspacePrepared: boolean;
@@ -104,7 +120,7 @@ export declare class ImpelIdentityResolveError extends Error {
 }
 export declare const IMPEL_IDENTITY_RUN_TOKEN_HEADER: "x-impel-identity-run-token";
 export declare const IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE: "impelIdentityRunToken";
-export declare function defaultImpelEveChannel({ basicUser, basicPassword, includePlaceholderAuth, prepareAttachedRepos, checkoutDepth, trustedVercelSubjects, referenceRepos, }?: DefaultImpelEveChannelOptions): ImpelEveChannel;
+export declare function defaultImpelEveChannel({ basicUser, basicPassword, includePlaceholderAuth, prepareAttachedRepos, checkoutDepth, trustedVercelSubjects, referenceRepos, events, }?: DefaultImpelEveChannelOptions): ImpelEveChannel;
 export declare function createImpelEveChannelState(runContext: ImpelEveRunContext | null, workspaceAuth?: {
     identityRunToken?: string | null;
     /** @deprecated Accepted only for serialized pre-v1 state. */
@@ -122,4 +138,5 @@ export declare function impelEveCheckoutRef(runContext: ImpelEveRunContext, repo
 export declare function createImpelWorkspaceContextMessage(runContext: ImpelEveRunContext | null): string | undefined;
 export declare function resolveVercelConnectGitHubConnectorUid(value?: string | undefined): string;
 export declare function createVercelConnectGitHubTokenParams(runContext: ImpelEveRunContext, readOnly?: boolean): Record<string, unknown>;
+export {};
 //# sourceMappingURL=channel.d.ts.map

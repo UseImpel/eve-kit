@@ -20,7 +20,7 @@ export const IMPEL_IDENTITY_RUN_TOKEN_HEADER = "x-impel-identity-run-token";
 export const IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE = "impelIdentityRunToken";
 export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_USER ??
     process.env.IMPEL_EVE_BASIC_USER, basicPassword = process.env.EVE_APP_BASIC_PASSWORD ??
-    process.env.IMPEL_EVE_BASIC_PASSWORD, includePlaceholderAuth = false, prepareAttachedRepos = true, checkoutDepth = readCheckoutDepthFromEnv(), trustedVercelSubjects, referenceRepos, } = {}) {
+    process.env.IMPEL_EVE_BASIC_PASSWORD, includePlaceholderAuth = false, prepareAttachedRepos = true, checkoutDepth = readCheckoutDepthFromEnv(), trustedVercelSubjects, referenceRepos, events, } = {}) {
     const basic = basicUser && basicPassword
         ? [httpBasic({ username: basicUser, password: basicPassword })]
         : [];
@@ -52,14 +52,16 @@ export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_U
         },
         routes: createImpelEveRoutes(auth),
         events: {
-            async "turn.started"(_event, channel, ctx) {
-                if (!prepareAttachedRepos)
-                    return;
-                await prepareImpelEveWorkspace(channel.state, {
-                    checkoutDepth,
-                    referenceRepos,
-                    getSandbox: () => ctx.getSandbox(),
-                });
+            ...events,
+            async "turn.started"(event, channel, ctx) {
+                if (prepareAttachedRepos) {
+                    await prepareImpelEveWorkspace(channel.state, {
+                        checkoutDepth,
+                        referenceRepos,
+                        getSandbox: () => ctx.getSandbox(),
+                    });
+                }
+                await events?.["turn.started"]?.(event, channel, ctx);
             },
         },
     });
@@ -177,6 +179,7 @@ export function normalizeImpelEveRunContext(value) {
             ? value.installationId
             : undefined,
         githubConnectorUid: readString(value.githubConnectorUid),
+        reviewTarget: parseOpenReviewTarget(value.reviewTarget),
         runId: readString(value.runId),
         traceId: readString(value.traceId),
         agent: isRecord(value.agent) ? value.agent : undefined,
@@ -184,6 +187,42 @@ export function normalizeImpelEveRunContext(value) {
         codeIntelligence: parseCodeIntelligenceContext(value.codeIntelligence),
         workspaceSeed: parseWorkspaceSeed(value.workspaceSeed),
     });
+}
+function parseOpenReviewTarget(value) {
+    if (!isRecord(value))
+        return undefined;
+    const repoFullName = readString(value.repoFullName);
+    const headSha = readString(value.headSha)?.toLowerCase();
+    const headRef = readString(value.headRef);
+    const baseSha = readString(value.baseSha)?.toLowerCase();
+    const baseRef = readString(value.baseRef);
+    const pullRequestNumber = value.pullRequestNumber;
+    const triggerCommentId = value.triggerCommentId;
+    if (!repoFullName ||
+        !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repoFullName) ||
+        !headSha ||
+        !/^[a-f0-9]{40,64}$/u.test(headSha) ||
+        !headRef ||
+        !baseSha ||
+        !/^[a-f0-9]{40,64}$/u.test(baseSha) ||
+        !baseRef ||
+        typeof pullRequestNumber !== "number" ||
+        !Number.isSafeInteger(pullRequestNumber) ||
+        pullRequestNumber <= 0 ||
+        typeof triggerCommentId !== "number" ||
+        !Number.isSafeInteger(triggerCommentId) ||
+        triggerCommentId <= 0) {
+        return undefined;
+    }
+    return {
+        repoFullName,
+        pullRequestNumber,
+        triggerCommentId,
+        headSha,
+        headRef,
+        baseSha,
+        baseRef,
+    };
 }
 function parseCodeIntelligenceContext(value) {
     if (!isRecord(value))
