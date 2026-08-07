@@ -20,6 +20,13 @@ export interface DefaultImpelEveChannelOptions {
      * default (open) networking and no GitHub auth.
      */
     referenceRepos?: readonly string[];
+    /**
+     * Expose the bounded, synchronous `/eve/v1/answer` surface. Enable this only
+     * for read-only agents whose registry policy also opts into direct answers.
+     * Slow answers return the already-started Eve session for durable adoption;
+     * they never start a second model run.
+     */
+    directAnswer?: boolean;
 }
 export interface ImpelEveRunContext {
     orgId?: string;
@@ -104,7 +111,7 @@ export declare class ImpelIdentityResolveError extends Error {
 }
 export declare const IMPEL_IDENTITY_RUN_TOKEN_HEADER: "x-impel-identity-run-token";
 export declare const IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE: "impelIdentityRunToken";
-export declare function defaultImpelEveChannel({ basicUser, basicPassword, includePlaceholderAuth, prepareAttachedRepos, checkoutDepth, trustedVercelSubjects, referenceRepos, }?: DefaultImpelEveChannelOptions): ImpelEveChannel;
+export declare function defaultImpelEveChannel({ basicUser, basicPassword, includePlaceholderAuth, prepareAttachedRepos, checkoutDepth, trustedVercelSubjects, referenceRepos, directAnswer, }?: DefaultImpelEveChannelOptions): ImpelEveChannel;
 export declare function createImpelEveChannelState(runContext: ImpelEveRunContext | null, workspaceAuth?: {
     identityRunToken?: string | null;
     /** @deprecated Accepted only for serialized pre-v1 state. */

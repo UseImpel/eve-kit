@@ -19,6 +19,7 @@ import {
   type AuthFn,
 } from "eve/channels/auth";
 import type { SandboxNetworkPolicy, SandboxSession } from "eve/sandbox";
+import type { HandleMessageStreamEvent } from "eve/client";
 import type { UserContent } from "ai";
 
 export interface DefaultImpelEveChannelOptions {
@@ -41,6 +42,13 @@ export interface DefaultImpelEveChannelOptions {
    * default (open) networking and no GitHub auth.
    */
   referenceRepos?: readonly string[];
+  /**
+   * Expose the bounded, synchronous `/eve/v1/answer` surface. Enable this only
+   * for read-only agents whose registry policy also opts into direct answers.
+   * Slow answers return the already-started Eve session for durable adoption;
+   * they never start a second model run.
+   */
+  directAnswer?: boolean;
 }
 
 export interface ImpelEveRunContext {
@@ -193,6 +201,7 @@ type VercelConnectModule = {
 const DEFAULT_GITHUB_CONNECTOR_UID = "github/useimpel-github";
 const EVE_SESSION_ID_HEADER = "x-eve-session-id";
 const EVE_MESSAGE_STREAM_CONTENT_TYPE = "application/x-ndjson; charset=utf-8";
+const DIRECT_ANSWER_INLINE_BUDGET_MS = 24_000;
 export const IMPEL_IDENTITY_RUN_TOKEN_HEADER =
   "x-impel-identity-run-token" as const;
 export const IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE =
@@ -208,6 +217,7 @@ export function defaultImpelEveChannel({
   checkoutDepth = readCheckoutDepthFromEnv(),
   trustedVercelSubjects,
   referenceRepos,
+  directAnswer = false,
 }: DefaultImpelEveChannelOptions = {}): ImpelEveChannel {
   const basic =
     basicUser && basicPassword
@@ -255,7 +265,7 @@ export function defaultImpelEveChannel({
           : {}),
       };
     },
-    routes: createImpelEveRoutes(auth),
+    routes: createImpelEveRoutes(auth, { directAnswer }),
     events: {
       async "turn.started"(_event, channel, ctx) {
         if (!prepareAttachedRepos) return;
@@ -764,9 +774,13 @@ async function prepareReferenceRepoAccess(
   }
 }
 
-function createImpelEveRoutes(auth: readonly AuthFn<Request>[]) {
+function createImpelEveRoutes(
+  auth: readonly AuthFn<Request>[],
+  options: { directAnswer: boolean },
+) {
   return [
     createImpelEveInfoRoute(auth),
+    ...(options.directAnswer ? [createImpelEveAnswerRoute(auth)] : []),
     POST<ImpelEveChannelState>("/eve/v1/session", async (request, args) => {
       const authorized = await routeAuth(request, auth);
       if (authorized instanceof Response) return authorized;
@@ -910,6 +924,129 @@ function createImpelEveRoutes(auth: readonly AuthFn<Request>[]) {
       },
     ),
   ];
+}
+
+type DirectAnswerOutcome =
+  | { status: "succeeded"; answer: string }
+  | { status: "continuation_required" }
+  | { status: "failed"; error: string };
+
+async function readDirectAnswer(
+  stream: ReadableStream<HandleMessageStreamEvent>,
+  timeoutMs = DIRECT_ANSWER_INLINE_BUDGET_MS,
+): Promise<DirectAnswerOutcome> {
+  const reader = stream.getReader();
+  const timedOut = Symbol("direct-answer-timeout");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<typeof timedOut>((resolve) => {
+    timer = setTimeout(() => resolve(timedOut), timeoutMs);
+  });
+  let finalText = "";
+  try {
+    for (;;) {
+      const next = await Promise.race([reader.read(), timeout]);
+      if (next === timedOut) {
+        await reader.cancel("direct answer promoted to durable continuation");
+        return { status: "continuation_required" };
+      }
+      if (next.done) {
+        return finalText
+          ? { status: "succeeded", answer: finalText }
+          : { status: "failed", error: "Eve answer stream ended without a final answer." };
+      }
+      const event = next.value;
+      if (event.type === "message.completed" && event.data.message?.trim()) {
+        finalText = event.data.message;
+      }
+      if (event.type === "session.failed") {
+        return { status: "failed", error: event.data.message };
+      }
+      if (event.type === "session.waiting") {
+        return { status: "continuation_required" };
+      }
+      if (event.type === "session.completed") {
+        return finalText
+          ? { status: "succeeded", answer: finalText }
+          : { status: "failed", error: "Eve completed without a final answer." };
+      }
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
+    reader.releaseLock();
+  }
+}
+
+function createImpelEveAnswerRoute(
+  auth: readonly AuthFn<Request>[],
+): HttpRouteDefinition<ImpelEveChannelState> {
+  return POST<ImpelEveChannelState>("/eve/v1/answer", async (request, args) => {
+    const authorized = await routeAuth(request, auth);
+    if (authorized instanceof Response) return authorized;
+
+    const body = await parseJsonBody(request);
+    if (body instanceof Response) return body;
+    const question =
+      typeof body.question === "string" && body.question.trim()
+        ? body.question.trim()
+        : null;
+    if (!question) return jsonError("Missing or empty 'question' field.", 400);
+
+    const context = parseClientContextField(body.clientContext);
+    if (context instanceof Response) return context;
+    const sessionAuth = attachImpelIdentityRunToken(
+      authorized,
+      readClientContextIdentityRunToken(body.clientContext),
+    );
+    const runContext = normalizeImpelEveRunContext(body.clientContext);
+    const state = createImpelEveChannelState(
+      runContext,
+      {
+        identityRunToken: readClientContextIdentityRunToken(body.clientContext),
+      },
+    );
+    const session = await args.send(
+      context ? { message: question, context } : question,
+      withState(
+        {
+          auth: sessionAuth,
+          // A control-plane retry with the same server-authored run id resumes
+          // this exact Eve session instead of starting a second one.
+          continuationToken: `eve-answer:${runContext?.runId ?? crypto.randomUUID()}`,
+          mode: "task",
+        },
+        state,
+      ),
+    );
+    const outcome = await readDirectAnswer(await session.getEventStream());
+    const common = {
+      schema: "impel.eve-answer.v1" as const,
+      sessionId: session.id,
+      continuationToken: session.continuationToken,
+      startIndex: 0,
+    };
+    if (outcome.status === "succeeded") {
+      return Response.json(
+        { ...common, status: outcome.status, answer: outcome.answer, forUser: outcome.answer },
+        { headers: { "cache-control": "no-store", [EVE_SESSION_ID_HEADER]: session.id } },
+      );
+    }
+    if (outcome.status === "continuation_required") {
+      return Response.json(
+        { ...common, status: outcome.status, retryable: true, durableSessionCreated: true },
+        {
+          headers: { "cache-control": "no-store", [EVE_SESSION_ID_HEADER]: session.id },
+          status: 202,
+        },
+      );
+    }
+    return Response.json(
+      { ...common, status: outcome.status, error: outcome.error },
+      {
+        headers: { "cache-control": "no-store", [EVE_SESSION_ID_HEADER]: session.id },
+        status: 502,
+      },
+    );
+  });
 }
 
 function createImpelEveInfoRoute(
