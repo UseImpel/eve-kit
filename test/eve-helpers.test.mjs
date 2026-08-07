@@ -309,6 +309,100 @@ test("default Eve session route seeds channel state from clientContext", async (
   assert.match(sent[0].input.context[1], /UseImpel\/next: \/workspace/);
 });
 
+test("direct answer is opt-in and returns the Eve result byte-for-byte", async () => {
+  const channel = defaultImpelEveChannel({
+    basicUser: "user",
+    basicPassword: "pass",
+    directAnswer: true,
+    prepareAttachedRepos: false,
+  });
+  const route = channel.routes.find(
+    (candidate) =>
+      candidate.method === "POST" && candidate.path === "/eve/v1/answer",
+  );
+  assert.ok(route);
+
+  const answer = "exact **answer**\n\n- unchanged\n";
+  const sent = [];
+  const response = await route.handler(
+    new Request("https://agent.example/eve/v1/answer", {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${Buffer.from("user:pass").toString("base64")}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        question: "What changed?",
+        clientContext: { orgId: "impel", runId: "run_answer" },
+      }),
+    }),
+    routeArgsWithSession(sent, [
+      {
+        type: "message.completed",
+        data: {
+          finishReason: "stop",
+          message: answer,
+          sequence: 1,
+          stepIndex: 0,
+          turnId: "turn_1",
+        },
+      },
+      { type: "session.completed" },
+    ]),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    schema: "impel.eve-answer.v1",
+    status: "succeeded",
+    answer,
+    forUser: answer,
+    sessionId: "ses_answer",
+    continuationToken: "eve:answer-token",
+    startIndex: 0,
+  });
+  assert.equal(sent[0].options.mode, "task");
+  assert.equal(sent[0].options.state.runContext.runId, "run_answer");
+});
+
+test("direct answer returns its existing Eve session when it must continue", async () => {
+  const channel = defaultImpelEveChannel({
+    basicUser: "user",
+    basicPassword: "pass",
+    directAnswer: true,
+    prepareAttachedRepos: false,
+  });
+  const route = channel.routes.find(
+    (candidate) =>
+      candidate.method === "POST" && candidate.path === "/eve/v1/answer",
+  );
+  assert.ok(route);
+  const response = await route.handler(
+    new Request("https://agent.example/eve/v1/answer", {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${Buffer.from("user:pass").toString("base64")}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ question: "Slow question" }),
+    }),
+    routeArgsWithSession([], [
+      { type: "session.waiting", data: { wait: "next-user-message" } },
+    ]),
+  );
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(await response.json(), {
+    schema: "impel.eve-answer.v1",
+    status: "continuation_required",
+    retryable: true,
+    durableSessionCreated: true,
+    sessionId: "ses_answer",
+    continuationToken: "eve:answer-token",
+    startIndex: 0,
+  });
+});
+
 test("preserves deterministic repo checkout planning and workspace context", () => {
   assert.deepEqual(planImpelEveRepoCheckouts(["UseImpel/next"]), [
     { repo: "UseImpel/next", path: "/workspace", role: "primary" },
@@ -367,6 +461,35 @@ test("preserves Vercel Connect token parameter helpers", () => {
     },
   );
 });
+
+function routeArgsWithSession(sent, events) {
+  return {
+    async send(input, options) {
+      sent.push({ input, options });
+      return {
+        id: "ses_answer",
+        continuationToken: "eve:answer-token",
+        async getEventStream() {
+          return new ReadableStream({
+            start(controller) {
+              for (const event of events) controller.enqueue(event);
+              controller.close();
+            },
+          });
+        },
+      };
+    },
+    getSession() {
+      throw new Error("not used");
+    },
+    params: {},
+    receive() {
+      throw new Error("not used");
+    },
+    requestIp: null,
+    waitUntil() {},
+  };
+}
 
 function restoreEnv(name, value) {
   if (value === undefined) delete process.env[name];
