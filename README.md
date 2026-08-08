@@ -10,7 +10,7 @@ account and performs one Anthropic Messages or OpenAI Responses model turn.
 ## Install
 
 ```sh
-npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v1.3.2.tar.gz
+npm install https://github.com/UseImpel/eve-kit/archive/refs/tags/v1.3.3.tar.gz
 ```
 
 ## Eve usage
@@ -123,6 +123,13 @@ surfaced as `ImpelGatewayPoolError`. It exposes `code`, `retryable`,
 `model_not_entitled` is non-retryable even though the gateway wire response is a
 502; the surfaced error intentionally hides that status so Eve does not retry a
 capacity configuration problem.
+
+A 401/403 remains non-retryable unless the trusted gateway returns
+`x-impel-upstream-auth-rejected: true`, which proves that the provider rejected
+an injected pooled credential. The gateway penalizes that credential before
+returning the signal, so the AI SDK retries the same no-output call against a
+sibling seat or refreshed token. Gateway authentication and governance
+rejections never receive this signal.
 
 ## Codex compatibility helpers
 
