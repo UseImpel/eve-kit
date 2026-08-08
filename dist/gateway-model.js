@@ -47,6 +47,7 @@ export const IMPEL_GATEWAY_MODEL_ALIASES = {
 const CLIENT_CONTEXT_SENTINEL = "Client context:\n";
 const RUN_TOKEN_PLACEHOLDER = "<impel-run-token>";
 const UPSTREAM_AUTH_REJECTED_HEADER = "x-impel-upstream-auth-rejected";
+const MANAGED_VIRTUAL_KEY_MISS_HEADER = "x-impel-managed-virtual-key-miss";
 const FORBIDDEN_AUTH_HEADERS = new Set(["authorization", "x-api-key"]);
 const POOL_ERROR_CODES = new Set([
     "model_not_entitled",
@@ -755,6 +756,9 @@ function mapGatewayError(error, fallbackModel) {
         const retryableUpstreamAuthRejection = (apiError.statusCode === 401 || apiError.statusCode === 403) &&
             headerValue(apiError.responseHeaders, UPSTREAM_AUTH_REJECTED_HEADER) ===
                 "true";
+        const retryableManagedVirtualKeyMiss = (apiError.statusCode === 401 || apiError.statusCode === 403) &&
+            headerValue(apiError.responseHeaders, MANAGED_VIRTUAL_KEY_MISS_HEADER) ===
+                "true";
         return new APICallError({
             message: gatewayRequestErrorMessage(apiError.statusCode, fallbackModel),
             url: "",
@@ -762,7 +766,9 @@ function mapGatewayError(error, fallbackModel) {
             statusCode: apiError.statusCode,
             responseHeaders: undefined,
             responseBody: undefined,
-            isRetryable: apiError.isRetryable || retryableUpstreamAuthRejection,
+            isRetryable: apiError.isRetryable ||
+                retryableUpstreamAuthRejection ||
+                retryableManagedVirtualKeyMiss,
         });
     }
     const sanitized = new Error(gatewayRequestErrorMessage(undefined, fallbackModel));

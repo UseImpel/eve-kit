@@ -718,6 +718,77 @@ test("AI SDK retries an attested no-output auth rejection through the gateway mo
   assert.equal(calls, 2);
 });
 
+test("retries only gateway-attested managed virtual-key misses", async () => {
+  for (const attested of [false, true]) {
+    const sensitiveMarker = `private-managed-key-context-${attested}`;
+    const model = impelGatewayModel("gpt-5.6-sol", {
+      ...baseOptions(async () =>
+        Response.json(
+          {
+            type: "virtual_key_not_found",
+            error: {
+              message: `virtual key not found for ${sensitiveMarker}`,
+            },
+          },
+          {
+            status: 401,
+            headers: attested
+              ? { "X-Impel-Managed-Virtual-Key-Miss": "true" }
+              : undefined,
+          },
+        ),
+      ),
+    });
+
+    await assert.rejects(
+      () => model.doGenerate({ prompt: userPrompt(sensitiveMarker) }),
+      (error) => {
+        assert.ok(APICallError.isInstance(error));
+        assert.equal(error.statusCode, 401);
+        assert.equal(error.isRetryable, attested);
+        assert.equal(error.url, "");
+        assert.equal(error.requestBodyValues, undefined);
+        assert.equal(error.responseBody, undefined);
+        assert.equal(error.responseHeaders, undefined);
+        assert.doesNotMatch(
+          inspect(error, { depth: 10 }),
+          new RegExp(sensitiveMarker, "u"),
+        );
+        return true;
+      },
+    );
+  }
+});
+
+test("AI SDK replays an attested managed virtual-key miss once without output", async () => {
+  let calls = 0;
+  const model = impelGatewayModel("gpt-5.6-sol", {
+    ...baseOptions(async () => {
+      calls += 1;
+      return calls === 1
+        ? Response.json(
+            {
+              type: "virtual_key_not_found",
+              error: { message: "managed key cache miss" },
+            },
+            {
+              status: 401,
+              headers: { "x-impel-managed-virtual-key-miss": "true" },
+            },
+          )
+        : openAIStreamResponse();
+    }),
+  });
+
+  const result = await generateText({
+    model,
+    prompt: "Retry the same safe request.",
+  });
+
+  assert.equal(result.text, "ready");
+  assert.equal(calls, 2);
+});
+
 test("maps pool errors on stream setup and leaves unrelated API errors intact", async () => {
   const exhausted = impelGatewayModel("sonnet", {
     ...baseOptions(async () =>
