@@ -46,6 +46,7 @@ export const IMPEL_GATEWAY_MODEL_ALIASES = {
 };
 const CLIENT_CONTEXT_SENTINEL = "Client context:\n";
 const RUN_TOKEN_PLACEHOLDER = "<impel-run-token>";
+const UPSTREAM_AUTH_REJECTED_HEADER = "x-impel-upstream-auth-rejected";
 const FORBIDDEN_AUTH_HEADERS = new Set(["authorization", "x-api-key"]);
 const POOL_ERROR_CODES = new Set([
     "model_not_entitled",
@@ -751,6 +752,9 @@ function mapGatewayError(error, fallbackModel) {
         });
     }
     if (apiError) {
+        const retryableUpstreamAuthRejection = (apiError.statusCode === 401 || apiError.statusCode === 403) &&
+            headerValue(apiError.responseHeaders, UPSTREAM_AUTH_REJECTED_HEADER) ===
+                "true";
         return new APICallError({
             message: gatewayRequestErrorMessage(apiError.statusCode, fallbackModel),
             url: "",
@@ -758,7 +762,7 @@ function mapGatewayError(error, fallbackModel) {
             statusCode: apiError.statusCode,
             responseHeaders: undefined,
             responseBody: undefined,
-            isRetryable: apiError.isRetryable,
+            isRetryable: apiError.isRetryable || retryableUpstreamAuthRejection,
         });
     }
     const sanitized = new Error(gatewayRequestErrorMessage(undefined, fallbackModel));
@@ -799,11 +803,10 @@ function readPoolErrorDetails(value) {
 function readRetryAfter(headers) {
     if (!headers)
         return undefined;
-    const normalized = Object.fromEntries(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]));
-    const retryAfterMs = Number(normalized["retry-after-ms"]);
+    const retryAfterMs = Number(headerValue(headers, "retry-after-ms"));
     if (Number.isFinite(retryAfterMs) && retryAfterMs >= 0)
         return retryAfterMs;
-    const raw = normalized["retry-after"];
+    const raw = headerValue(headers, "retry-after");
     if (!raw)
         return undefined;
     const seconds = Number(raw);
@@ -813,6 +816,16 @@ function readRetryAfter(headers) {
     if (!Number.isFinite(date))
         return undefined;
     return Math.max(0, date - Date.now());
+}
+function headerValue(headers, expectedName) {
+    if (!headers)
+        return undefined;
+    const normalizedName = expectedName.toLowerCase();
+    for (const [name, value] of Object.entries(headers)) {
+        if (name.toLowerCase() === normalizedName)
+            return value;
+    }
+    return undefined;
 }
 function poolErrorCode(value) {
     return typeof value === "string" &&

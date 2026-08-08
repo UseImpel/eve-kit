@@ -650,6 +650,74 @@ test("maps OpenAI rate-limit errors and Retry-After metadata", async () => {
   );
 });
 
+test("retries only gateway-attested pooled upstream auth rejections", async () => {
+  for (const attested of [false, true]) {
+    const sensitiveMarker = `private-auth-context-${attested}`;
+    const model = impelGatewayModel("gpt-5.6-sol", {
+      ...baseOptions(async () =>
+        Response.json(
+          {
+            error: {
+              type: "authentication_error",
+              message: `provider rejected credential ${sensitiveMarker}`,
+            },
+          },
+          {
+            status: 401,
+            headers: attested
+              ? { "X-Impel-Upstream-Auth-Rejected": "true" }
+              : undefined,
+          },
+        ),
+      ),
+    });
+
+    await assert.rejects(
+      () => model.doGenerate({ prompt: userPrompt(sensitiveMarker) }),
+      (error) => {
+        assert.ok(APICallError.isInstance(error));
+        assert.equal(error.statusCode, 401);
+        assert.equal(error.isRetryable, attested);
+        assert.equal(error.url, "");
+        assert.equal(error.requestBodyValues, undefined);
+        assert.equal(error.responseBody, undefined);
+        assert.equal(error.responseHeaders, undefined);
+        assert.doesNotMatch(
+          inspect(error, { depth: 10 }),
+          new RegExp(sensitiveMarker, "u"),
+        );
+        return true;
+      },
+    );
+  }
+});
+
+test("AI SDK retries an attested no-output auth rejection through the gateway model", async () => {
+  let calls = 0;
+  const model = impelGatewayModel("gpt-5.6-sol", {
+    ...baseOptions(async () => {
+      calls += 1;
+      return calls === 1
+        ? Response.json(
+            { error: { type: "authentication_error", message: "stale pooled token" } },
+            {
+              status: 401,
+              headers: { "x-impel-upstream-auth-rejected": "true" },
+            },
+          )
+        : openAIStreamResponse();
+    }),
+  });
+
+  const result = await generateText({
+    model,
+    prompt: "Retry the same safe request.",
+  });
+
+  assert.equal(result.text, "ready");
+  assert.equal(calls, 2);
+});
+
 test("maps pool errors on stream setup and leaves unrelated API errors intact", async () => {
   const exhausted = impelGatewayModel("sonnet", {
     ...baseOptions(async () =>
