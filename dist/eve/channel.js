@@ -16,12 +16,18 @@ export class ImpelIdentityResolveError extends Error {
 const DEFAULT_GITHUB_CONNECTOR_UID = "github/useimpel-github";
 const EVE_SESSION_ID_HEADER = "x-eve-session-id";
 const EVE_MESSAGE_STREAM_CONTENT_TYPE = "application/x-ndjson; charset=utf-8";
-const DIRECT_ANSWER_INLINE_BUDGET_MS = 24_000;
+export const DEFAULT_DIRECT_ANSWER_INLINE_BUDGET_MS = 24_000;
+export const MAX_DIRECT_ANSWER_INLINE_BUDGET_MS = 30_000;
 export const IMPEL_IDENTITY_RUN_TOKEN_HEADER = "x-impel-identity-run-token";
 export const IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE = "impelIdentityRunToken";
 export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_USER ??
     process.env.IMPEL_EVE_BASIC_USER, basicPassword = process.env.EVE_APP_BASIC_PASSWORD ??
-    process.env.IMPEL_EVE_BASIC_PASSWORD, includePlaceholderAuth = false, prepareAttachedRepos = true, checkoutDepth = readCheckoutDepthFromEnv(), trustedVercelSubjects, referenceRepos, directAnswer = false, } = {}) {
+    process.env.IMPEL_EVE_BASIC_PASSWORD, includePlaceholderAuth = false, prepareAttachedRepos = true, checkoutDepth = readCheckoutDepthFromEnv(), trustedVercelSubjects, referenceRepos, directAnswer = false, directAnswerInlineBudgetMs = DEFAULT_DIRECT_ANSWER_INLINE_BUDGET_MS, directAnswerFinalText, } = {}) {
+    if (!Number.isSafeInteger(directAnswerInlineBudgetMs) ||
+        directAnswerInlineBudgetMs < 1 ||
+        directAnswerInlineBudgetMs > MAX_DIRECT_ANSWER_INLINE_BUDGET_MS) {
+        throw new Error(`directAnswerInlineBudgetMs must be an integer from 1 to ${MAX_DIRECT_ANSWER_INLINE_BUDGET_MS}.`);
+    }
     const basic = basicUser && basicPassword
         ? [httpBasic({ username: basicUser, password: basicPassword })]
         : [];
@@ -51,7 +57,11 @@ export function defaultImpelEveChannel({ basicUser = process.env.EVE_APP_BASIC_U
                     : {}),
             };
         },
-        routes: createImpelEveRoutes(auth, { directAnswer }),
+        routes: createImpelEveRoutes(auth, {
+            directAnswer,
+            directAnswerInlineBudgetMs,
+            directAnswerFinalText,
+        }),
         events: {
             async "turn.started"(_event, channel, ctx) {
                 if (!prepareAttachedRepos)
@@ -474,7 +484,9 @@ async function prepareReferenceRepoAccess(state, runContext, referenceRepos, opt
 function createImpelEveRoutes(auth, options) {
     return [
         createImpelEveInfoRoute(auth),
-        ...(options.directAnswer ? [createImpelEveAnswerRoute(auth)] : []),
+        ...(options.directAnswer
+            ? [createImpelEveAnswerRoute(auth, options)]
+            : []),
         POST("/eve/v1/session", async (request, args) => {
             const authorized = await routeAuth(request, auth);
             if (authorized instanceof Response)
@@ -575,7 +587,7 @@ function createImpelEveRoutes(auth, options) {
         }),
     ];
 }
-async function readDirectAnswer(stream, timeoutMs = DIRECT_ANSWER_INLINE_BUDGET_MS) {
+async function readDirectAnswer(stream, timeoutMs = DEFAULT_DIRECT_ANSWER_INLINE_BUDGET_MS, finalTextForEvent) {
     const reader = stream.getReader();
     const timedOut = Symbol("direct-answer-timeout");
     let timer;
@@ -596,6 +608,11 @@ async function readDirectAnswer(stream, timeoutMs = DIRECT_ANSWER_INLINE_BUDGET_
                     : { status: "failed", error: "Eve answer stream ended without a final answer." };
             }
             const event = next.value;
+            const projected = finalTextForEvent?.(event);
+            if (typeof projected === "string" && projected.trim()) {
+                await reader.cancel("direct answer projected from trusted terminal event");
+                return { status: "succeeded", answer: projected };
+            }
             if (event.type === "message.completed" && event.data.message?.trim()) {
                 finalText = event.data.message;
             }
@@ -618,7 +635,7 @@ async function readDirectAnswer(stream, timeoutMs = DIRECT_ANSWER_INLINE_BUDGET_
         reader.releaseLock();
     }
 }
-function createImpelEveAnswerRoute(auth) {
+function createImpelEveAnswerRoute(auth, options) {
     return POST("/eve/v1/answer", async (request, args) => {
         const authorized = await routeAuth(request, auth);
         if (authorized instanceof Response)
@@ -646,7 +663,7 @@ function createImpelEveAnswerRoute(auth) {
             continuationToken: `eve-answer:${runContext?.runId ?? crypto.randomUUID()}`,
             mode: "task",
         }, state));
-        const outcome = await readDirectAnswer(await session.getEventStream());
+        const outcome = await readDirectAnswer(await session.getEventStream(), options.directAnswerInlineBudgetMs, options.directAnswerFinalText);
         const common = {
             schema: "impel.eve-answer.v1",
             sessionId: session.id,

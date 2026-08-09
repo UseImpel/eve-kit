@@ -1,5 +1,6 @@
 import { type Channel } from "eve/channels";
 import type { SandboxSession } from "eve/sandbox";
+import type { HandleMessageStreamEvent } from "eve/client";
 export interface DefaultImpelEveChannelOptions {
     basicUser?: string;
     basicPassword?: string;
@@ -27,7 +28,22 @@ export interface DefaultImpelEveChannelOptions {
      * they never start a second model run.
      */
     directAnswer?: boolean;
+    /**
+     * Maximum time spent observing the direct-answer session before returning
+     * its durable continuation. The default leaves additional transport margin;
+     * callers may opt into at most 30 seconds when their outer deadline is
+     * correspondingly larger.
+     */
+    directAnswerInlineBudgetMs?: number;
+    /**
+     * Optional application-owned projection for a trusted terminal stream
+     * event. This is useful for thin proxy agents whose validated tool result is
+     * already the authoritative answer and must not pay for a second model relay.
+     * Throw to fail closed; return null/undefined to keep reading normally.
+     */
+    directAnswerFinalText?: DirectAnswerFinalText;
 }
+export type DirectAnswerFinalText = (event: HandleMessageStreamEvent) => string | null | undefined;
 export interface ImpelEveRunContext {
     orgId?: string;
     repos?: string[];
@@ -109,9 +125,11 @@ export declare class ImpelIdentityResolveError extends Error {
         status?: number;
     });
 }
+export declare const DEFAULT_DIRECT_ANSWER_INLINE_BUDGET_MS = 24000;
+export declare const MAX_DIRECT_ANSWER_INLINE_BUDGET_MS = 30000;
 export declare const IMPEL_IDENTITY_RUN_TOKEN_HEADER: "x-impel-identity-run-token";
 export declare const IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE: "impelIdentityRunToken";
-export declare function defaultImpelEveChannel({ basicUser, basicPassword, includePlaceholderAuth, prepareAttachedRepos, checkoutDepth, trustedVercelSubjects, referenceRepos, directAnswer, }?: DefaultImpelEveChannelOptions): ImpelEveChannel;
+export declare function defaultImpelEveChannel({ basicUser, basicPassword, includePlaceholderAuth, prepareAttachedRepos, checkoutDepth, trustedVercelSubjects, referenceRepos, directAnswer, directAnswerInlineBudgetMs, directAnswerFinalText, }?: DefaultImpelEveChannelOptions): ImpelEveChannel;
 export declare function createImpelEveChannelState(runContext: ImpelEveRunContext | null, workspaceAuth?: {
     identityRunToken?: string | null;
     /** @deprecated Accepted only for serialized pre-v1 state. */
