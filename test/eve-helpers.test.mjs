@@ -12,6 +12,8 @@ import {
   impelClaudeBridgeConnection,
 } from "../dist/eve/connections/claude-bridge.js";
 import {
+  DEFAULT_DIRECT_ANSWER_INLINE_BUDGET_MS,
+  MAX_DIRECT_ANSWER_INLINE_BUDGET_MS,
   createImpelEveChannelState,
   createImpelWorkspaceContextMessage,
   createVercelConnectGitHubTokenParams,
@@ -363,6 +365,158 @@ test("direct answer is opt-in and returns the Eve result byte-for-byte", async (
   });
   assert.equal(sent[0].options.mode, "task");
   assert.equal(sent[0].options.state.runContext.runId, "run_answer");
+});
+
+test("direct answer accepts only a bounded application-specific inline budget", () => {
+  assert.equal(DEFAULT_DIRECT_ANSWER_INLINE_BUDGET_MS, 24_000);
+  assert.equal(MAX_DIRECT_ANSWER_INLINE_BUDGET_MS, 30_000);
+  assert.doesNotThrow(() => defaultImpelEveChannel({
+    directAnswer: true,
+    directAnswerInlineBudgetMs: MAX_DIRECT_ANSWER_INLINE_BUDGET_MS,
+  }));
+  for (const directAnswerInlineBudgetMs of [0, 1.5, 30_001]) {
+    assert.throws(
+      () => defaultImpelEveChannel({ directAnswerInlineBudgetMs }),
+      /directAnswerInlineBudgetMs must be an integer from 1 to 30000/,
+    );
+  }
+});
+
+test("direct answer route applies its configured inline budget", async () => {
+  const channel = defaultImpelEveChannel({
+    basicUser: "user",
+    basicPassword: "pass",
+    directAnswer: true,
+    directAnswerInlineBudgetMs: 1,
+    prepareAttachedRepos: false,
+  });
+  const route = channel.routes.find(
+    (candidate) =>
+      candidate.method === "POST" && candidate.path === "/eve/v1/answer",
+  );
+  assert.ok(route);
+  const args = routeArgsWithSession([], []);
+  args.send = async () => ({
+    id: "ses_answer",
+    continuationToken: "eve:answer-token",
+    async getEventStream() {
+      return new ReadableStream({});
+    },
+  });
+
+  const response = await route.handler(
+    new Request("https://agent.example/eve/v1/answer", {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${Buffer.from("user:pass").toString("base64")}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ question: "Slow question" }),
+    }),
+    args,
+  );
+  assert.equal(response.status, 202);
+});
+
+test("direct answer can project one trusted terminal event without a model relay", async () => {
+  const answer = "exact projected **answer**\n";
+  const channel = defaultImpelEveChannel({
+    basicUser: "user",
+    basicPassword: "pass",
+    directAnswer: true,
+    directAnswerInlineBudgetMs: MAX_DIRECT_ANSWER_INLINE_BUDGET_MS,
+    directAnswerFinalText(event) {
+      if (event.type !== "action.result") return null;
+      const result = event.data.result;
+      if (
+        result.kind !== "tool-result" ||
+        result.toolName !== "trusted_answer" ||
+        typeof result.output !== "object" ||
+        result.output === null ||
+        !("finalText" in result.output) ||
+        typeof result.output.finalText !== "string"
+      ) {
+        throw new Error("untrusted direct answer event");
+      }
+      return result.output.finalText;
+    },
+    prepareAttachedRepos: false,
+  });
+  const route = channel.routes.find(
+    (candidate) =>
+      candidate.method === "POST" && candidate.path === "/eve/v1/answer",
+  );
+  assert.ok(route);
+
+  const response = await route.handler(
+    new Request("https://agent.example/eve/v1/answer", {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${Buffer.from("user:pass").toString("base64")}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ question: "What changed?" }),
+    }),
+    routeArgsWithSession([], [
+      {
+        type: "action.result",
+        data: {
+          result: {
+            callId: "call-1",
+            kind: "tool-result",
+            toolName: "trusted_answer",
+            output: { finalText: answer },
+          },
+          sequence: 1,
+          status: "completed",
+          stepIndex: 0,
+          turnId: "turn_1",
+        },
+      },
+    ]),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    schema: "impel.eve-answer.v1",
+    status: "succeeded",
+    answer,
+    forUser: answer,
+    sessionId: "ses_answer",
+    continuationToken: "eve:answer-token",
+    startIndex: 0,
+  });
+});
+
+test("direct answer projection fails closed", async () => {
+  const channel = defaultImpelEveChannel({
+    basicUser: "user",
+    basicPassword: "pass",
+    directAnswer: true,
+    directAnswerFinalText() {
+      throw new Error("projection rejected the event");
+    },
+    prepareAttachedRepos: false,
+  });
+  const route = channel.routes.find(
+    (candidate) =>
+      candidate.method === "POST" && candidate.path === "/eve/v1/answer",
+  );
+  assert.ok(route);
+  await assert.rejects(
+    route.handler(
+      new Request("https://agent.example/eve/v1/answer", {
+        method: "POST",
+        headers: {
+          authorization: `Basic ${Buffer.from("user:pass").toString("base64")}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ question: "What changed?" }),
+      }),
+      routeArgsWithSession([], [{ type: "session.completed" }]),
+    ),
+    /projection rejected the event/,
+  );
 });
 
 test("direct answer returns its existing Eve session when it must continue", async () => {

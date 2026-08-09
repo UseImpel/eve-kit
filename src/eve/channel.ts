@@ -49,7 +49,25 @@ export interface DefaultImpelEveChannelOptions {
    * they never start a second model run.
    */
   directAnswer?: boolean;
+  /**
+   * Maximum time spent observing the direct-answer session before returning
+   * its durable continuation. The default leaves additional transport margin;
+   * callers may opt into at most 30 seconds when their outer deadline is
+   * correspondingly larger.
+   */
+  directAnswerInlineBudgetMs?: number;
+  /**
+   * Optional application-owned projection for a trusted terminal stream
+   * event. This is useful for thin proxy agents whose validated tool result is
+   * already the authoritative answer and must not pay for a second model relay.
+   * Throw to fail closed; return null/undefined to keep reading normally.
+   */
+  directAnswerFinalText?: DirectAnswerFinalText;
 }
+
+export type DirectAnswerFinalText = (
+  event: HandleMessageStreamEvent,
+) => string | null | undefined;
 
 export interface ImpelEveRunContext {
   orgId?: string;
@@ -201,7 +219,8 @@ type VercelConnectModule = {
 const DEFAULT_GITHUB_CONNECTOR_UID = "github/useimpel-github";
 const EVE_SESSION_ID_HEADER = "x-eve-session-id";
 const EVE_MESSAGE_STREAM_CONTENT_TYPE = "application/x-ndjson; charset=utf-8";
-const DIRECT_ANSWER_INLINE_BUDGET_MS = 24_000;
+export const DEFAULT_DIRECT_ANSWER_INLINE_BUDGET_MS = 24_000;
+export const MAX_DIRECT_ANSWER_INLINE_BUDGET_MS = 30_000;
 export const IMPEL_IDENTITY_RUN_TOKEN_HEADER =
   "x-impel-identity-run-token" as const;
 export const IMPEL_IDENTITY_RUN_TOKEN_ATTRIBUTE =
@@ -218,7 +237,18 @@ export function defaultImpelEveChannel({
   trustedVercelSubjects,
   referenceRepos,
   directAnswer = false,
+  directAnswerInlineBudgetMs = DEFAULT_DIRECT_ANSWER_INLINE_BUDGET_MS,
+  directAnswerFinalText,
 }: DefaultImpelEveChannelOptions = {}): ImpelEveChannel {
+  if (
+    !Number.isSafeInteger(directAnswerInlineBudgetMs) ||
+    directAnswerInlineBudgetMs < 1 ||
+    directAnswerInlineBudgetMs > MAX_DIRECT_ANSWER_INLINE_BUDGET_MS
+  ) {
+    throw new Error(
+      `directAnswerInlineBudgetMs must be an integer from 1 to ${MAX_DIRECT_ANSWER_INLINE_BUDGET_MS}.`,
+    );
+  }
   const basic =
     basicUser && basicPassword
       ? [httpBasic({ username: basicUser, password: basicPassword })]
@@ -265,7 +295,11 @@ export function defaultImpelEveChannel({
           : {}),
       };
     },
-    routes: createImpelEveRoutes(auth, { directAnswer }),
+    routes: createImpelEveRoutes(auth, {
+      directAnswer,
+      directAnswerInlineBudgetMs,
+      directAnswerFinalText,
+    }),
     events: {
       async "turn.started"(_event, channel, ctx) {
         if (!prepareAttachedRepos) return;
@@ -776,11 +810,17 @@ async function prepareReferenceRepoAccess(
 
 function createImpelEveRoutes(
   auth: readonly AuthFn<Request>[],
-  options: { directAnswer: boolean },
+  options: {
+    directAnswer: boolean;
+    directAnswerInlineBudgetMs: number;
+    directAnswerFinalText?: DirectAnswerFinalText;
+  },
 ) {
   return [
     createImpelEveInfoRoute(auth),
-    ...(options.directAnswer ? [createImpelEveAnswerRoute(auth)] : []),
+    ...(options.directAnswer
+      ? [createImpelEveAnswerRoute(auth, options)]
+      : []),
     POST<ImpelEveChannelState>("/eve/v1/session", async (request, args) => {
       const authorized = await routeAuth(request, auth);
       if (authorized instanceof Response) return authorized;
@@ -933,7 +973,8 @@ type DirectAnswerOutcome =
 
 async function readDirectAnswer(
   stream: ReadableStream<HandleMessageStreamEvent>,
-  timeoutMs = DIRECT_ANSWER_INLINE_BUDGET_MS,
+  timeoutMs = DEFAULT_DIRECT_ANSWER_INLINE_BUDGET_MS,
+  finalTextForEvent?: DirectAnswerFinalText,
 ): Promise<DirectAnswerOutcome> {
   const reader = stream.getReader();
   const timedOut = Symbol("direct-answer-timeout");
@@ -955,6 +996,11 @@ async function readDirectAnswer(
           : { status: "failed", error: "Eve answer stream ended without a final answer." };
       }
       const event = next.value;
+      const projected = finalTextForEvent?.(event);
+      if (typeof projected === "string" && projected.trim()) {
+        await reader.cancel("direct answer projected from trusted terminal event");
+        return { status: "succeeded", answer: projected };
+      }
       if (event.type === "message.completed" && event.data.message?.trim()) {
         finalText = event.data.message;
       }
@@ -978,6 +1024,10 @@ async function readDirectAnswer(
 
 function createImpelEveAnswerRoute(
   auth: readonly AuthFn<Request>[],
+  options: {
+    directAnswerInlineBudgetMs: number;
+    directAnswerFinalText?: DirectAnswerFinalText;
+  },
 ): HttpRouteDefinition<ImpelEveChannelState> {
   return POST<ImpelEveChannelState>("/eve/v1/answer", async (request, args) => {
     const authorized = await routeAuth(request, auth);
@@ -1017,7 +1067,11 @@ function createImpelEveAnswerRoute(
         state,
       ),
     );
-    const outcome = await readDirectAnswer(await session.getEventStream());
+    const outcome = await readDirectAnswer(
+      await session.getEventStream(),
+      options.directAnswerInlineBudgetMs,
+      options.directAnswerFinalText,
+    );
     const common = {
       schema: "impel.eve-answer.v1" as const,
       sessionId: session.id,
